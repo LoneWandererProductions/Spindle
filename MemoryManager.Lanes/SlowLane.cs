@@ -1,0 +1,838 @@
+/*
+ * COPYRIGHT:   See COPYING in the top level directory
+ * PROJECT:     MemoryArenaPrototype.Lane
+ * FILE:        SlowLane.cs
+ * PURPOSE:     Memory store for long lived data and stuff we could not hold into the fast lane.
+ *              Ids for Allocations is always negative here.
+ * PROGRAMMER:  Peter Geinitz (Wayfarer)
+ */
+
+// ReSharper disable EventNeverSubscribedTo.Global
+
+using MemoryManager.Core;
+using System.Diagnostics;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using Extended.Unmanaged;
+
+namespace MemoryManager.Lanes
+{
+    /// <inheritdoc cref="IMemoryLane" />
+    /// <summary>
+    ///      The SlowLane for all the sorted out stuff and bigger longer resting data.
+    /// </summary>
+    /// <seealso cref="T:Core.IMemoryLane" />
+    /// <seealso cref="T:System.IDisposable" />
+    public sealed class SlowLane : IMemoryLane, IDisposable
+    {
+#if DEBUG
+        /// <summary>
+        /// The debug names
+        /// </summary>
+        private readonly Dictionary<int, string> _debugNames = new();
+#endif
+
+        /// <summary>
+        ///      The safety margin
+        /// </summary>
+        private const double SafetyMargin = 0.10; // 10% free space reserved
+
+        /// <summary>
+        ///      The free ids
+        /// </summary>
+        private readonly UnmanagedIntList _freeIds = new(128);
+
+        /// <summary>
+        ///      The free slots, we reuse freed slots
+        /// </summary>
+        private readonly UnmanagedIntList _freeSlots = new(128);
+
+        /// <summary>
+        ///      The handle index
+        /// </summary>
+        private readonly UnmanagedMap<int> _handleIndex = new(7); // handleId -> entries array index
+
+        /// <summary>
+        ///      The allocated entries
+        /// </summary>
+        private AllocationEntry[] _entries;
+
+        /// <summary>
+        ///      The next handle identifier
+        /// </summary>
+        private int _nextHandleId = -1;
+
+        /// <summary>
+        /// The free blocks
+        /// </summary>
+        private FreeBlock[] _freeBlocks = new FreeBlock[128];
+
+        /// <summary>
+        /// The free block count
+        /// </summary>
+        private int _freeBlockCount;
+
+        /// <summary>
+        ///      The threshold. Anything smaller than this goes to the BlobManager.
+        ///      e.g., 256 bytes
+        /// </summary>
+        private readonly int _blobThreshold = 256;
+
+        /// <summary>
+        /// The physical byte capacity assigned to the BlobManager sub-allocator.
+        /// </summary>
+        private readonly int _blobCapacity;
+
+        /// <summary>
+        ///      The specialized manager for tiny/unpredictable allocations.
+        /// </summary>
+        private BlobManager? _blobManager;
+
+        /// <summary>
+        /// Pointer to the flat versions array. Index matches absolute handle ID (-id).
+        /// </summary>
+        private unsafe uint* _versions;
+
+        /// <summary>
+        /// Current capacity of the versions array.
+        /// </summary>
+        private int _versionsCapacity;
+
+        /// <summary>
+        /// The disposed
+        /// </summary>
+        private bool _disposed;
+
+        /// <summary>
+        /// The configured search strategy used to scan the free-list for gaps.
+        /// </summary>
+        private readonly AllocationStrategy _searchStrategy;
+
+        /// <summary>
+        /// Gets or sets the compaction strategy used when defragmenting the lane buffer.
+        /// </summary>
+        public CompactionStyle CompactionStyle { get; set; }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="SlowLane" /> class.
+        /// </summary>
+        /// <param name="capacity">The capacity.</param>
+        /// <param name="blobCapacityFraction">The BLOB capacity fraction.</param>
+        /// <param name="blobThreshold">The BLOB threshold.</param>
+        /// <param name="maxEntries">The maximum entries.</param>
+        /// <param name="slowLaneFreeListStrategy">The slow lane free list strategy.</param>
+        /// <param name="compactionStyle">The compaction style policy (Full or GoodEnough).</param>
+        public unsafe SlowLane(
+            int capacity,
+            double blobCapacityFraction = 0.20,
+            int blobThreshold = 256,
+            int maxEntries = 1024,
+            AllocationStrategy slowLaneFreeListStrategy = default,
+            CompactionStyle compactionStyle = CompactionStyle.Full)
+        {
+            Capacity = capacity;
+            _blobThreshold = blobThreshold;
+
+            // CAPTURE STRATEGIES: Persist configured choices
+            _searchStrategy = slowLaneFreeListStrategy;
+            CompactionStyle = compactionStyle;
+
+            Buffer = Marshal.AllocHGlobal(capacity);
+            _entries = new AllocationEntry[maxEntries];
+
+            // INITIALIZATION: Allocate flat tracking for versions (+1 to accommodate 1-based indexing of absolute IDs)
+            _versionsCapacity = maxEntries + 1;
+            _versions = (uint*)NativeMemory.AllocZeroed((nuint)_versionsCapacity, sizeof(uint));
+
+            // Use the fraction provided by the config/constructor
+            _blobCapacity = (int)(capacity * blobCapacityFraction);
+
+            _freeBlocks[0] = new FreeBlock { Offset = _blobCapacity, Size = Capacity - _blobCapacity };
+            _freeBlockCount = 1;
+
+            _blobManager = new BlobManager(Buffer, _blobCapacity);
+        }
+
+        /// <summary>
+        ///      Gets or sets the buffer.
+        /// </summary>
+        /// <value>
+        ///      The buffer.
+        /// </value>
+        public nint Buffer { get; private set; }
+
+        /// <summary>
+        ///      Gets the capacity.
+        /// </summary>
+        /// <value>
+        ///      The capacity.
+        /// </value>
+        public int Capacity { get; }
+
+        /// <inheritdoc />
+        public int EntryCount { get; private set; }
+
+        /// <inheritdoc />
+        /// <summary>
+        ///      Performs application-defined tasks associated with freeing, releasing, or resetting unmanaged resources.
+        /// </summary>
+        public void Dispose()
+        {
+            Dispose(true); // Call the internal dispose method
+            GC.SuppressFinalize(this);
+        }
+
+        /// <inheritdoc />
+        /// <summary>
+        ///      Allocates the specified size.
+        /// </summary>
+        /// <param name="size">The size.</param>
+        /// <param name="priority">The priority.</param>
+        /// <param name="hints">The hints.</param>
+        /// <param name="debugName">Name of the debug.</param>
+        /// <param name="currentFrame">The current frame.</param>
+        /// <returns>Allocated memory and a reference.</returns>
+        /// <exception cref="T:System.OutOfMemoryException">SlowLane: Cannot allocate</exception>
+        public unsafe MemoryHandle Allocate(
+            int size,
+            AllocationPriority priority = AllocationPriority.Normal,
+            AllocationHints hints = AllocationHints.None,
+            string? debugName = null,
+            int currentFrame = 0)
+        {
+            if (!CanAllocate(size))
+                throw new OutOfMemoryException("SlowLane: Cannot allocate");
+
+            // --- ROUTE TO BLOB MANAGER FOR SMALL SIZES ---
+            if (size <= _blobThreshold && _blobManager != null && _blobManager.CanAllocate(size))
+            {
+                return _blobManager.Allocate(size, priority, hints, debugName, currentFrame);
+            }
+
+            // Calculate tracking footprint dimension rules including canary bytes
+            var physicalSizeNeeded = MemoryCanary.GetPhysicalSize(size);
+            var offset = MemoryLaneUtils.FindFreeSpot(physicalSizeNeeded, ref _freeBlocks, ref _freeBlockCount,
+                _searchStrategy);
+
+            // AUTO-HEALING: If fragmented, trigger policy-based compaction to open up a contiguous gap
+            if (offset == -1)
+            {
+                Compact(CompactionStyle, size);
+                offset = MemoryLaneUtils.FindFreeSpot(physicalSizeNeeded, ref _freeBlocks, ref _freeBlockCount,
+                    _searchStrategy);
+
+                if (offset == -1)
+                    throw new OutOfMemoryException(
+                        "SlowLane: Cannot allocate - No contiguous block large enough after compaction.");
+            }
+
+            // Shift user coordinates forward safely past the pre-canary buffer space
+            var userOffset = MemoryCanary.GetUserOffset(offset);
+            MemoryCanary.WriteGuardBands(Buffer, userOffset, size);
+
+            var slotIndex = _freeSlots.Length > 0 ? _freeSlots.Pop() : EntryCount++;
+            EnsureEntryCapacity(slotIndex);
+
+            // So we reuse freed handles here (Yields sequential negative IDs, e.g., -1, -2, -3...)
+            var id = MemoryLaneUtils.GetNextId(_freeIds, ref _nextHandleId);
+
+#if DEBUG
+            if (!string.IsNullOrEmpty(debugName))
+            {
+                _debugNames[id] = debugName;
+            }
+#endif
+            // Map sequential negative ID directly to positive array coordinates
+            var versionIdx = -id;
+            if (versionIdx >= _versionsCapacity)
+            {
+                GrowVersions(versionIdx + 1);
+            }
+
+            // True O(1) Version Bump
+            var currentVersion = ++_versions[versionIdx];
+
+            _entries[slotIndex] = new AllocationEntry
+            {
+                Offset = userOffset, // Resolve() will instantly target this for fast lookups
+                Size = size,
+                HandleId = id,
+                Version = currentVersion,
+                IsStub = false,
+                Priority = priority,
+                Hints = hints,
+                RedirectToId = 0,
+                AllocationFrame = currentFrame,
+                LastAccessFrame = currentFrame
+            };
+
+            _handleIndex[id] = slotIndex;
+
+            return new MemoryHandle(id, currentVersion, this);
+        }
+
+        /// <inheritdoc />
+        public bool CanAllocate(int size)
+        {
+            // --- ROUTE TO BLOB MANAGER FOR SMALL SIZES ---
+            if (size <= _blobThreshold && _blobManager != null)
+            {
+                return _blobManager.CanAllocate(size);
+            }
+
+            // Ensure our metrics test the complete physical footprint needed in memory
+            var physicalSize = MemoryCanary.GetPhysicalSize(size);
+
+            // --- STANDARD BLOCK ALLOCATION LOGIC ---
+            if (GetUsed() + physicalSize > Capacity * (1.0 - SafetyMargin))
+                return false;
+
+            for (var i = 0; i < _freeBlockCount; i++)
+            {
+                if (_freeBlocks[i].Size >= physicalSize)
+                    return true;
+            }
+
+            return false;
+        }
+
+        /// <inheritdoc />
+        /// <summary>
+        ///      Resolves the specified handle.
+        /// </summary>
+        /// <param name="handle">The handle.</param>
+        /// <returns>Pointer to the stored data.</returns>
+        /// <exception cref="T:System.InvalidOperationException">
+        ///      SlowLane: Invalid handle
+        ///      or
+        ///      SlowLane: Cannot resolve stub entry without redirection
+        /// </exception>
+        public nint Resolve(MemoryHandle handle)
+        {
+            // Fast O(1) integer check! No dictionary lookup needed here.
+            if (handle.Id <= BlobManager.StartingId && _blobManager != null)
+            {
+                return _blobManager.Resolve(handle);
+            }
+
+            if (!_handleIndex.TryGetValue(handle.Id, out var index))
+                throw new InvalidOperationException("SlowLane: Invalid handle");
+
+            var entry = _entries[index];
+
+            // This is vital for the SlowLane because objects live so long here.
+            if (entry.Version != handle.Version)
+                throw new AccessViolationException($"SlowLane Zombie: ID {handle.Id} version mismatch.");
+
+            if (entry.IsStub && entry.RedirectToId == 0)
+                throw new InvalidOperationException("SlowLane: Cannot resolve stub without redirection");
+
+            return Buffer + entry.Offset;
+        }
+
+        /// <inheritdoc />
+        /// <summary>
+        ///      Frees the specified handle.
+        /// </summary>
+        /// <param name="handle">The handle.</param>
+        /// <exception cref="T:System.InvalidOperationException">SlowLane: Invalid handle</exception>
+        public void Free(MemoryHandle handle)
+        {
+            // Fast O(1) integer check!
+            if (handle.Id <= BlobManager.StartingId && _blobManager != null)
+            {
+                _blobManager.Free(handle);
+                return;
+            }
+
+            if (!_handleIndex.TryRemove(handle.Id, out var index))
+                throw new InvalidOperationException($"SlowLane: Invalid handle {handle.Id}");
+
+            var entry = _entries[index];
+
+            // Assert boundary canary guard patterns are intact before deallocation
+            MemoryCanary.Validate(Buffer, entry.Offset, entry.Size, handle.Id);
+
+            // Reconstruct absolute layout footprint blocks to return back to the list
+            var physicalOffset = MemoryCanary.GetPhysicalOffset(entry.Offset);
+            var physicalSize = MemoryCanary.GetPhysicalSize(entry.Size);
+            MemoryLaneUtils.ReturnFreeSpace(physicalOffset, physicalSize, ref _freeBlocks, ref _freeBlockCount);
+
+            _entries[index] = default;
+            _freeSlots.Push(index);
+            _freeIds.Push(handle.Id);
+
+#if DEBUG
+            _debugNames.Remove(handle.Id);
+#endif
+        }
+
+        /// <summary>
+        /// Frees the many.
+        /// </summary>
+        /// <param name="handles">The handles.</param>
+        /// <exception cref="InvalidOperationException">SlowLane: Invalid handle {handle.Id}</exception>
+        public unsafe void FreeMany(MemoryHandle[] handles)
+        {
+            var span = handles.AsSpan();
+            var count = span.Length;
+
+            if (count == 0) return;
+
+            // Using stackalloc for small-to-medium batches avoids GC pressure
+            var ids = stackalloc int[count];
+            var indices = stackalloc int[count];
+
+            for (var i = 0; i < count; i++)
+            {
+                var id = span[i].Id;
+
+                // Route tiny blobs safely away from structural array paths
+                if (id <= BlobManager.StartingId && _blobManager != null)
+                {
+                    _blobManager.Free(span[i]);
+                    continue;
+                }
+
+                if (!_handleIndex.TryRemove(id, out var index))
+                    throw new InvalidOperationException($"SlowLane: Invalid handle {id}");
+
+                var entry = _entries[index];
+
+                // Verify buffer bounds are clear on every block inside the batch operation
+                MemoryCanary.Validate(Buffer, entry.Offset, entry.Size, id);
+
+                var physicalOffset = MemoryCanary.GetPhysicalOffset(entry.Offset);
+                var physicalSize = MemoryCanary.GetPhysicalSize(entry.Size);
+                MemoryLaneUtils.ReturnFreeSpace(physicalOffset, physicalSize, ref _freeBlocks, ref _freeBlockCount);
+
+                // Clear entry data
+                _entries[index] = default;
+
+                ids[i] = id;
+                indices[i] = index;
+            }
+
+            // Batch add to our unmanaged lists
+            _freeIds.PushRange(new ReadOnlySpan<int>(ids, count));
+            _freeSlots.PushRange(new ReadOnlySpan<int>(indices, count));
+        }
+
+        /// <inheritdoc />
+        public void Compact()
+        {
+            Compact(CompactionStyle, 0);
+        }
+
+        /// <summary>
+        /// Compacts the unmanaged lane buffer using the specified policy and target size requirement.
+        /// </summary>
+        /// <param name="style">The compaction style (Full or GoodEnough).</param>
+        /// <param name="requiredSize">Target size required if GoodEnough style is active.</param>
+        public unsafe void Compact(CompactionStyle style, int requiredSize = 0)
+        {
+            if (_entries == null || _handleIndex.Count == 0) return;
+
+            // 1. Extract non-stub living entries
+            var validEntries = new List<AllocationEntry>(_handleIndex.Count);
+            foreach (var index in _handleIndex.Values)
+            {
+                var entry = _entries[index];
+                if (!entry.IsStub)
+                {
+                    validEntries.Add(entry);
+                }
+            }
+
+            if (validEntries.Count == 0)
+            {
+                _freeBlocks[0] = new FreeBlock
+                {
+                    Offset = _blobCapacity,
+                    Size = Capacity - _blobCapacity
+                };
+                _freeBlockCount = 1;
+                _freeSlots.Clear();
+                EntryCount = 0;
+                return;
+            }
+
+            // 2. Sort by current physical offset ascending
+            validEntries.Sort((a, b) =>
+                MemoryCanary.GetPhysicalOffset(a.Offset).CompareTo(MemoryCanary.GetPhysicalOffset(b.Offset)));
+
+            var currentOffset = _blobCapacity;
+            var physicalTargetNeeded = requiredSize > 0 ? MemoryCanary.GetPhysicalSize(requiredSize) : 0;
+            var isGoodEnough = style == CompactionStyle.GoodEnough;
+
+            // 3. Perform surgical in-place sliding
+            for (var i = 0; i < validEntries.Count; i++)
+            {
+                var entry = validEntries[i];
+                var srcPhysicalOffset = MemoryCanary.GetPhysicalOffset(entry.Offset);
+                var physicalSize = MemoryCanary.GetPhysicalSize(entry.Size);
+
+                if (srcPhysicalOffset != currentOffset)
+                {
+                    // Slide block in-place (System.Buffer.MemoryCopy handles overlapping regions safely when copying downward)
+                    System.Buffer.MemoryCopy(
+                        (void*)(Buffer + srcPhysicalOffset),
+                        (void*)(Buffer + currentOffset),
+                        physicalSize,
+                        physicalSize);
+
+                    entry.Offset = MemoryCanary.GetUserOffset(currentOffset);
+
+                    if (_handleIndex.TryGetValue(entry.HandleId, out var slotIndex))
+                    {
+                        _entries[slotIndex] = entry;
+                    }
+
+                    validEntries[i] = entry;
+                }
+
+                currentOffset += physicalSize;
+
+                // 4. Evaluate "GoodEnough" stopping condition
+                if (isGoodEnough && physicalTargetNeeded > 0)
+                {
+                    var nextEntryOffset = i + 1 < validEntries.Count
+                        ? MemoryCanary.GetPhysicalOffset(validEntries[i + 1].Offset)
+                        : Capacity;
+
+                    var gap = nextEntryOffset - currentOffset;
+                    if (gap >= physicalTargetNeeded)
+                    {
+                        // Target gap created! Stop shifting remaining blocks to save CPU cycles.
+                        break;
+                    }
+                }
+            }
+
+            // 5. Rebuild free-list blocks accurately
+            RebuildFreeBlocks(validEntries);
+
+            OnCompaction?.Invoke(nameof(SlowLane));
+        }
+
+        /// <summary>
+        /// Rebuilds the free block list based on active allocation positions.
+        /// </summary>
+        private void RebuildFreeBlocks(List<AllocationEntry> validEntries)
+        {
+            validEntries.Sort((a, b) =>
+                MemoryCanary.GetPhysicalOffset(a.Offset).CompareTo(MemoryCanary.GetPhysicalOffset(b.Offset)));
+
+            _freeBlockCount = 0;
+            var cursor = _blobCapacity;
+
+            foreach (var entry in validEntries)
+            {
+                var physOffset = MemoryCanary.GetPhysicalOffset(entry.Offset);
+                var physSize = MemoryCanary.GetPhysicalSize(entry.Size);
+
+                if (physOffset > cursor)
+                {
+                    EnsureFreeBlockArrayCapacity(_freeBlockCount + 1);
+                    _freeBlocks[_freeBlockCount++] = new FreeBlock
+                    {
+                        Offset = cursor,
+                        Size = physOffset - cursor
+                    };
+                }
+
+                cursor = physOffset + physSize;
+            }
+
+            if (cursor < Capacity)
+            {
+                EnsureFreeBlockArrayCapacity(_freeBlockCount + 1);
+                _freeBlocks[_freeBlockCount++] = new FreeBlock
+                {
+                    Offset = cursor,
+                    Size = Capacity - cursor
+                };
+            }
+        }
+
+        /// <summary>
+        /// Ensures free blocks array has capacity for required count.
+        /// </summary>
+        private void EnsureFreeBlockArrayCapacity(int requiredCount)
+        {
+            if (_freeBlocks.Length < requiredCount)
+            {
+                Array.Resize(ref _freeBlocks, Math.Max(_freeBlocks.Length * 2, requiredCount));
+            }
+        }
+
+        /// <inheritdoc />
+        public bool HasHandle(MemoryHandle handle)
+        {
+            if (handle.Id <= BlobManager.StartingId && _blobManager != null)
+            {
+                return _blobManager.HasHandle(handle);
+            }
+
+            return MemoryLaneUtils.HasHandle(handle, _handleIndex);
+        }
+
+        /// <inheritdoc />
+        public AllocationEntry GetEntry(MemoryHandle handle)
+        {
+            if (handle.Id <= BlobManager.StartingId && _blobManager != null)
+            {
+                return _blobManager.GetEntry(handle);
+            }
+
+            return MemoryLaneUtils.GetEntry(handle, _handleIndex, _entries, nameof(SlowLane));
+        }
+
+        /// <inheritdoc />
+        public int GetAllocationSize(MemoryHandle handle)
+        {
+            if (handle.Id <= BlobManager.StartingId && _blobManager != null)
+            {
+                return _blobManager.GetAllocationSize(handle);
+            }
+
+            return MemoryLaneUtils.GetAllocationSize(handle, _handleIndex, _entries, nameof(SlowLane));
+        }
+
+        /// <inheritdoc />
+        public string DebugDump()
+        {
+            return MemoryLaneUtils.DebugDump(_entries, EntryCount);
+        }
+
+        /// <inheritdoc />
+        public event Action<string>? OnCompaction;
+
+        /// <inheritdoc />
+        public event Action<string, int, int>? OnAllocationExtension;
+
+        /// <inheritdoc />
+        public IEnumerable<MemoryHandle> GetHandles()
+        {
+            // Main Lane handles
+            foreach (var id in _handleIndex.Keys)
+            {
+                if (_handleIndex.TryGetValue(id, out var index))
+                {
+                    yield return new MemoryHandle(id, _entries[index].Version, this);
+                }
+            }
+
+            // Don't forget the tiny blobs!
+            if (_blobManager != null)
+            {
+                foreach (var blobHandle in _blobManager.GetHandles())
+                {
+                    yield return blobHandle;
+                }
+            }
+        }
+
+        /// <summary>
+        ///      Gets the total physical memory footprint currently in use.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private int GetUsed()
+        {
+            var used = 0;
+            for (var i = 0; i < EntryCount; i++)
+                if (!_entries[i].IsStub)
+                {
+                    // Track complete footprint size density so limits are verified accurately under debug builds
+                    used += MemoryCanary.GetPhysicalSize(_entries[i].Size);
+                }
+
+            return used;
+        }
+
+        /// <inheritdoc />
+        public int FreeSpace()
+        {
+            // Passes the physical tracking source lists to clear type signature compilation errors
+            var mainFreeSpace = MemoryLaneUtils.CalculateFreeSpace(_freeBlocks, _freeBlockCount);
+            var blobFreeSpace = _blobManager?.FreeSpace() ?? 0;
+
+            return mainFreeSpace + blobFreeSpace;
+        }
+
+        /// <summary>
+        ///      Ensures the entry capacity.
+        /// </summary>
+        private void EnsureEntryCapacity(int requiredSlotIndex)
+        {
+            var oldSize = _entries.Length;
+            var newSize = MemoryLaneUtils.EnsureEntryCapacity(ref _entries, requiredSlotIndex);
+
+            // Defensive Safeguard: Grow free blocks buffer concurrently
+            if (_freeBlocks.Length < newSize)
+            {
+                Array.Resize(ref _freeBlocks, newSize);
+            }
+
+            OnAllocationExtension?.Invoke(nameof(SlowLane), oldSize, newSize);
+        }
+
+        /// <summary>
+        /// Resizes the unmanaged versions buffer.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private unsafe void GrowVersions(int minCapacity)
+        {
+            var newCapacity = _versionsCapacity * 2;
+            if (newCapacity < minCapacity) newCapacity = minCapacity;
+
+            var newVersions = (uint*)NativeMemory.AllocZeroed((nuint)newCapacity, sizeof(uint));
+
+            if (_versions != null)
+            {
+                Unsafe.CopyBlock(newVersions, _versions, (uint)(_versionsCapacity * sizeof(uint)));
+                NativeMemory.Free(_versions);
+            }
+
+            _versions = newVersions;
+            _versionsCapacity = newCapacity;
+        }
+
+        /// <inheritdoc />
+        public int StubCount()
+        {
+            ReadOnlySpan<AllocationEntry> span = _entries.AsSpan(0, EntryCount);
+            return MemoryLaneUtils.StubCount(span);
+        }
+
+        /// <inheritdoc />
+        public int EstimateFragmentation()
+        {
+            // Targets the true unmanaged free blocks tracking array for precise fragmentation readout
+            return MemoryLaneUtils.EstimateFragmentation(_freeBlocks, _freeBlockCount);
+        }
+
+        /// <inheritdoc />
+        public double UsagePercentage()
+        {
+            return MemoryLaneUtils.UsagePercentage(EntryCount, _entries, Capacity);
+        }
+
+        /// <inheritdoc />
+        public string DebugVisualMap()
+        {
+            return MemoryLaneUtils.DebugVisualMap(_entries, Capacity);
+        }
+
+        /// <inheritdoc />
+        public string DebugRedirections()
+        {
+            if (_entries == null) throw new InvalidOperationException("SlowLane: Invalid memory.");
+
+#if DEBUG
+            return MemoryLaneUtils.DebugRedirections(_entries, EntryCount, _debugNames);
+#else
+            return MemoryLaneUtils.DebugRedirections(_entries, EntryCount, null);
+#endif
+        }
+
+        /// <summary>
+        ///      Dump all Debug Infos.
+        /// </summary>
+        public void LogDump()
+        {
+            Trace.WriteLine($"--- {GetType().Name} Dump Start ---");
+            Trace.WriteLine(DebugDump());
+            Trace.WriteLine(DebugVisualMap());
+            Trace.WriteLine(DebugRedirections());
+            Trace.WriteLine($"--- {GetType().Name} Dump End ---");
+        }
+
+        /// <inheritdoc />
+        public unsafe void Reset()
+        {
+            if (_disposed) throw new ObjectDisposedException(nameof(SlowLane));
+
+            EntryCount = 0;
+            _nextHandleId = -1;
+            _handleIndex.Clear();
+            _freeIds.Clear();
+            _freeSlots.Clear();
+
+            _freeBlockCount = 1;
+            _freeBlocks[0] = new FreeBlock { Offset = _blobCapacity, Size = Capacity - _blobCapacity };
+
+            _blobManager = new BlobManager(Buffer, _blobCapacity);
+
+            if (_entries != null)
+            {
+                Array.Clear(_entries, 0, _entries.Length);
+            }
+
+#if DEBUG
+            _debugNames.Clear();
+#endif
+
+            if (_versions != null && _versionsCapacity > 0)
+            {
+                Unsafe.InitBlock(_versions, 0, (uint)(_versionsCapacity * sizeof(uint)));
+            }
+        }
+
+        /// <summary>
+        /// Releases unmanaged and - optionally - managed resources.
+        /// </summary>
+        /// <param name="disposing"><c>true</c> to release both managed and unmanaged resources; <c>false</c> to release only unmanaged resources.</param>
+        private unsafe void Dispose(bool disposing)
+        {
+            if (_disposed) return;
+
+            _disposed = true;
+
+            if (disposing)
+            {
+                // Release managed tracking structures safely
+                _handleIndex.Clear();
+                _entries = null;
+            }
+
+            // 1. Clean up unmanaged list allocations first
+            _freeIds.Dispose();
+            _freeSlots.Dispose();
+
+            // 2. Clean up BlobManager BEFORE freeing the shared Buffer it references
+            if (_blobManager is IDisposable blobDisposable)
+            {
+                blobDisposable.Dispose();
+            }
+            else
+            {
+                _blobManager?.Compact();
+            }
+
+            // 3. Free main unmanaged Lane buffer
+            if (Buffer != IntPtr.Zero)
+            {
+                Marshal.FreeHGlobal(Buffer);
+                Buffer = IntPtr.Zero;
+            }
+
+            // 4. Free flat unmanaged versions array
+            if (_versions != null)
+            {
+                NativeMemory.Free(_versions);
+                _versions = null;
+            }
+
+            EntryCount = 0;
+        }
+
+        /// <summary>
+        /// Finalizes an instance of the <see cref="SlowLane"/> class.
+        /// </summary>
+        ~SlowLane()
+        {
+            Dispose(false);
+        }
+    }
+}

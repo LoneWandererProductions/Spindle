@@ -1,0 +1,32 @@
+<Window x:Class="Spindle.Viewer.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:imaging="clr-namespace:Imaging;assembly=Imaging"
+        Title="Spindle - Software Render Viewer" Height="650" Width="1000"
+        PreviewKeyDown="Window_PreviewKeyDown"
+        PreviewKeyUp="Window_PreviewKeyUp"
+        Closing="Window_Closing">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="25" />
+            <RowDefinition />
+        </Grid.RowDefinitions>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="170" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <ComboBox Grid.Row="0" Grid.Column="0" x:Name="ComboBoxRender" Focusable="False" IsTabStop="False"
+                  SelectionChanged="ComboBoxRender_SelectionChanged">
+            <ComboBoxItem Content="Terrain" />
+            <ComboBoxItem Content="Dungeon Solid" />
+            <ComboBoxItem Content="Dungeon Wireframe" />
+            <ComboBoxItem Content="Dungeon Ortho" />
+        </ComboBox>
+
+        <TextBox Grid.Row="1" Grid.Column="0" x:Name="TxtDiagnostics" TextWrapping="Wrap"
+                 VerticalScrollBarVisibility="Auto" IsReadOnly="True" />
+
+        <imaging:NativeBitmapDisplay Grid.Row="1" Grid.Column="1" x:Name="ImageView" />
+    </Grid>
+</Window>

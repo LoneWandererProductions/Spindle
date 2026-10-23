@@ -1,0 +1,142 @@
+﻿/*
+ * COPYRIGHT:   See COPYING in the top level directory
+ * PROJECT:     Imaging.Gifs
+ * FILE:        ImageGifInfo.cs
+ * PURPOSE:     Class Container that holds all informations about the gif in question.
+ * PROGRAMMER:  Peter Geinitz (Wayfarer)
+ * SOURCES:     https://stackoverflow.com/questions/18719302/net-creating-a-looping-gif-using-gifbitmapencoder
+ *              https://debugandrelease.blogspot.com/2018/12/creating-gifs-in-c.html
+ *              http://www.matthewflickinger.com/lab/whatsinagif/bits_and_bytes.asp
+ */
+
+// ReSharper disable MemberCanBeInternal
+// ReSharper disable UnusedMember.Global
+// ReSharper disable UnusedAutoPropertyAccessor.Global
+
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Imaging.Gifs
+{
+    /// <summary>
+    ///     Gif Information
+    /// </summary>
+    public sealed class ImageGifInfo
+    {
+        /// <summary>
+        ///     Gets or sets the header.
+        /// </summary>
+        /// <value>
+        ///     The header.
+        /// </value>
+        public string? Header { get; set; }
+
+        /// <summary>
+        ///     Gets or sets the width.
+        /// </summary>
+        /// <value>
+        ///     The width.
+        /// </value>
+        public int Width { get; set; }
+
+        /// <summary>
+        ///     Gets or sets the height.
+        /// </summary>
+        /// <value>
+        ///     The height.
+        /// </value>
+        public int Height { get; set; }
+
+        /// <summary>
+        ///     Gets or sets a value indicating whether this instance has global color table.
+        /// </summary>
+        /// <value>
+        ///     <c>true</c> if this instance has global color table; otherwise, <c>false</c>.
+        /// </value>
+        public bool HasGlobalColorTable { get; set; }
+
+        /// <summary>
+        ///     Gets or sets the size of the global color table.
+        /// </summary>
+        /// <value>
+        ///     The size of the global color table.
+        /// </value>
+        public int GlobalColorTableSize { get; set; }
+
+        /// <summary>
+        ///     Gets or sets the color resolution.
+        /// </summary>
+        /// <value>
+        ///     The color resolution.
+        /// </value>
+        public int ColorResolution { get; set; }
+
+        /// <summary>
+        ///     Gets or sets the index of the background color.
+        /// </summary>
+        /// <value>
+        ///     The index of the background color.
+        /// </value>
+        public int BackgroundColorIndex { get; set; }
+
+        /// <summary>
+        ///     Gets or sets the pixel aspect ratio.
+        /// </summary>
+        /// <value>
+        ///     The pixel aspect ratio.
+        /// </value>
+        public int PixelAspectRatio { get; set; }
+
+        /// <summary>
+        ///     Gets or sets the loop count.
+        /// </summary>
+        /// <value>
+        ///     The loop count.
+        /// </value>
+        public int? LoopCount { get; set; } // Nullable, since not all GIFs have this
+
+        /// <summary>
+        ///     Gets or sets the frames.
+        /// </summary>
+        /// <value>
+        ///     The frames.
+        /// </value>
+        public List<FrameInfo>? Frames { get; set; } =  [];
+
+        /// <summary>
+        ///     Gets the total duration.
+        ///     In seconds
+        /// </summary>
+        /// <value>
+        ///     The total duration.
+        /// </value>
+        public double TotalDuration
+        {
+            get
+            {
+                if (Frames != null)
+                {
+                    return Frames.Sum(f => f.DelayTime);
+                }
+
+                return 0;
+            }
+        }
+
+        /// <summary>
+        ///     Gets or sets the name.
+        /// </summary>
+        /// <value>
+        ///     The name.
+        /// </value>
+        public string? Name { get; set; }
+
+        /// <summary>
+        ///     Gets or sets the size.
+        /// </summary>
+        /// <value>
+        ///     The size.
+        /// </value>
+        public long Size { get; set; }
+    }
+}

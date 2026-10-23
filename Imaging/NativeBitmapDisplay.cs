@@ -1,0 +1,165 @@
+﻿/*
+ * COPYRIGHT:   See COPYING in the top level directory
+ * PROJECT:     Imaging
+ * FILE:        NativeBitmapDisplay.cs
+ * PURPOSE:     Fast Bitmap Display in Wpf do not expect wonders though.
+ * PROGRAMMER:  Peter Geinitz (Wayfarer)
+ */
+
+// ReSharper disable MissingSpace
+// ReSharper disable UnusedMember.Global
+
+using System.Drawing;
+using System.Reflection;
+using System.Windows;
+using System.Windows.Forms;
+using System.Windows.Forms.Integration;
+using MethodInvoker = System.Windows.Forms.MethodInvoker;
+
+namespace Imaging
+{
+    /// <inheritdoc />
+    /// <summary>
+    ///     Fast Bitmap Viewer for Wpf applications.
+    /// </summary>
+    /// <seealso cref="T:System.Windows.Forms.Integration.WindowsFormsHost" />
+    public sealed class NativeBitmapDisplay : WindowsFormsHost
+    {
+        /// <summary>
+        ///     The bitmap property
+        /// </summary>
+        public static readonly DependencyProperty BitmapProperty =
+            DependencyProperty.Register(
+                nameof(Bitmap),
+                typeof(Bitmap),
+                typeof(NativeBitmapDisplay),
+                new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender, OnBitmapChanged));
+
+        private readonly PictureBox _pictureBox;
+
+        /// <inheritdoc />
+        /// <summary>
+        ///     Initializes a new instance of the <see cref="T:Imaging.NativeBitmapDisplay" /> class.
+        /// </summary>
+        public NativeBitmapDisplay()
+        {
+            _pictureBox = new PictureBox
+            {
+                Dock = DockStyle.Fill, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.Transparent
+            };
+            EnableDoubleBuffering(_pictureBox);
+            Child = _pictureBox;
+        }
+
+        /// <summary>
+        ///     Gets or sets the bitmap.
+        /// </summary>
+        /// <value>
+        ///     The bitmap.
+        /// </value>
+        public Bitmap? Bitmap
+        {
+            get => (Bitmap?)GetValue(BitmapProperty);
+            set => SetValue(BitmapProperty, value);
+        }
+
+        /// <summary>
+        ///     Enables the double buffering.
+        /// </summary>
+        /// <param name="pictureBox">The picture box.</param>
+        private static void EnableDoubleBuffering(PictureBox pictureBox)
+        {
+            var doubleBufferProperty =
+                typeof(Control).GetProperty("DoubleBuffered", BindingFlags.NonPublic | BindingFlags.Instance);
+            doubleBufferProperty?.SetValue(pictureBox, true, null);
+        }
+
+        /// <summary>
+        ///     Refreshes the bitmap.
+        /// </summary>
+        /// <param name="bitmap">The bitmap.</param>
+        public void RefreshBitmap(Bitmap bitmap)
+        {
+            _pictureBox.Image?.Dispose();
+            _pictureBox.Image = bitmap;
+        }
+
+        /// <summary>
+        ///     Called when [bitmap changed].
+        /// </summary>
+        /// <param name="d">The d.</param>
+        /// <param name="e">The <see cref="DependencyPropertyChangedEventArgs" /> instance containing the event data.</param>
+        private static void OnBitmapChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+        {
+            if (d is not NativeBitmapDisplay control || e.NewValue is not Bitmap newBitmap)
+            {
+                return;
+            }
+
+            // Ensure we are on the UI thread before updating the image
+            if (control.Dispatcher.CheckAccess())
+            {
+                UpdateImage(control, newBitmap);
+            }
+            else
+            {
+                control.Dispatcher.Invoke(() => UpdateImage(control, newBitmap));
+            }
+        }
+
+        /// <summary>
+        ///     Updates the image.
+        ///     Do not dispose and do not use: Graphics.FromImage
+        /// </summary>
+        /// <param name="control">The control.</param>
+        /// <param name="newBitmap">The new bitmap.</param>
+        private static void UpdateImage(NativeBitmapDisplay control, Bitmap newBitmap)
+        {
+            if (ReferenceEquals(control._pictureBox.Image, newBitmap))
+            {
+                return;
+            }
+
+            // Grab the old image before overwriting it
+            var oldImage = control._pictureBox.Image;
+
+            // Instant O(1) assignment. No memory allocation, no cloning overhead.
+            control._pictureBox.Image = newBitmap;
+
+            // Dispose the old image AFTER swapping to prevent UI flickering
+            // and GDI+ locking issues.
+            oldImage?.Dispose();
+        }
+
+        /// <summary>
+        /// Forces the PictureBox to redraw the current image.
+        /// Call this after updating the DirectBitmap pixels!
+        /// </summary>
+        public void InvalidateCanvas()
+        {
+            if (_pictureBox.InvokeRequired)
+            {
+                _pictureBox.Invoke(new MethodInvoker(() => _pictureBox.Invalidate()));
+            }
+            else
+            {
+                _pictureBox.Invalidate();
+            }
+        }
+
+        /// <inheritdoc />
+        /// <summary>
+        ///     Immediately frees any system resources that the object might hold.
+        /// </summary>
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _pictureBox.Image?.Dispose();
+                _pictureBox.Dispose();
+            }
+
+            base.Dispose(disposing);
+        }
+    }
+}

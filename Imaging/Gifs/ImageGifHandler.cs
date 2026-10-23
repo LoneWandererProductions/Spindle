@@ -1,0 +1,441 @@
+﻿/*
+ * COPYRIGHT:   See COPYING in the top level directory
+ * PROJECT:     Imaging.Gifs
+ * FILE:        ImageGifHandler.cs
+ * PURPOSE:     Some processing stuff for Gif Images, not perfect, the files are slightly bigger though.
+ * PROGRAMMER:  Peter Geinitz (Wayfarer)
+ * SOURCES:     https://stackoverflow.com/questions/18719302/net-creating-a-looping-gif-using-gifbitmapencoder
+ *              https://debugandrelease.blogspot.com/2018/12/creating-gifs-in-c.html
+ *              http://www.matthewflickinger.com/lab/whatsinagif/bits_and_bytes.asp
+ */
+
+// ReSharper disable MemberCanBeInternal
+// ReSharper disable UnusedAutoPropertyAccessor.Global
+
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.IO;
+using System.Threading.Tasks;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using Imaging.Helpers;
+using Color = System.Drawing.Color;
+using PixelFormat = System.Drawing.Imaging.PixelFormat;
+
+namespace Imaging.Gifs
+{
+    /// <summary>
+    ///     Central Entry class for all things related to gifs
+    /// </summary>
+    public static class ImageGifHandler
+    {
+        /// <summary>
+        ///     Gets the image information.
+        /// </summary>
+        /// <param name="path">The path.</param>
+        /// <returns>gif Infos</returns>
+        public static ImageGifInfo? GetImageInfo(string path)
+        {
+            ImageGifInfo? info = null;
+
+            try
+            {
+                info = ImageGifMetadataExtractor.ExtractGifMetadata(path);
+            }
+            catch (FileNotFoundException ex)
+            {
+                Trace.WriteLine(ex.Message);
+                //TODo fill up
+            }
+            catch (InvalidDataException ex)
+            {
+                Trace.WriteLine(ex.Message);
+                //TODo fill up
+            }
+
+            return info;
+        }
+
+        /// <summary>
+        /// Splits the GIF.
+        /// </summary>
+        /// <param name="path">The path.</param>
+        /// <returns>
+        /// List of Images from gif
+        /// </returns>
+        /// <exception cref="System.IO.IOException">File not found: {path}</exception>
+        internal static async Task<List<Bitmap?>> SplitGifAsync(string path)
+        {
+            if (string.IsNullOrEmpty(path) || !File.Exists(path))
+                throw new IOException($"File not found: {path}");
+
+            return await Task.Run(() =>
+            {
+                var frames = new List<Bitmap?>();
+
+                try
+                {
+                    using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+                    using var gifImage = Image.FromStream(fs);
+
+                    var frameCount = gifImage.GetFrameCount(FrameDimension.Time);
+                    var width = gifImage.Width;
+                    var height = gifImage.Height;
+
+                    // Add 'using' so the master canvas is destroyed when we are done
+                    using var masterCanvas =
+                        new Bitmap(width, height, PixelFormat.Format32bppArgb);
+                    using var g = Graphics.FromImage(masterCanvas);
+
+                    g.Clear(Color.Gray);
+
+                    var disposalProperty = gifImage.GetPropertyItem(0x5100);
+
+                    if (disposalProperty?.Value == null || disposalProperty.Value.Length < frameCount * 4)
+                    {
+                        throw new InvalidDataException("GIF does not contain valid disposal method data.");
+                    }
+
+                    for (var i = 0; i < frameCount; i++)
+                    {
+                        gifImage.SelectActiveFrame(FrameDimension.Time, i);
+
+                        var disposalMethod = disposalProperty.Value[i * 4 + 3];
+
+                        if (disposalMethod == 2)
+                        {
+                            g.Clear(Color.Gray);
+                        }
+
+                        g.DrawImage(gifImage, new Rectangle(0, 0, width, height));
+
+                        // Snapshot the result
+                        frames.Add(new Bitmap(masterCanvas));
+                    }
+
+                    return frames;
+                }
+                catch (Exception ex)
+                {
+                    // If anything fails mid-extraction, destroy the orphaned frames
+                    foreach (var frame in frames)
+                    {
+                        frame?.Dispose();
+                    }
+
+                    frames.Clear();
+
+                    Trace.WriteLine($"Error splitting GIF: {ex.Message}");
+
+                    throw; // Rethrow so the caller knows it failed
+                }
+            });
+        }
+
+        /// <summary>
+        /// Loads the GIF using WPF's native decoder.
+        /// This perfectly preserves transparency and is much faster.
+        /// </summary>
+        /// <param name="path">The path.</param>
+        /// <returns>
+        /// List of Images from gif as ImageSource
+        /// </returns>
+        /// <exception cref="System.IO.IOException">File not found: {path}</exception>
+        internal static async Task<List<ImageSource>> LoadGif(string path)
+        {
+            if (string.IsNullOrEmpty(path) || !File.Exists(path))
+                throw new IOException($"File not found: {path}");
+
+            return await Task.Run(() =>
+            {
+                var result = new List<ImageSource>();
+
+                using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+                var decoder = new GifBitmapDecoder(fs, BitmapCreateOptions.PreservePixelFormat,
+                    BitmapCacheOption.OnLoad);
+
+                var width = decoder.Frames[0].PixelWidth;
+                var height = decoder.Frames[0].PixelHeight;
+
+                var composed = new WriteableBitmap(width, height, 96, 96, PixelFormats.Pbgra32, null);
+
+                // Clear initial canvas
+                ImageGifHelper.ClearBitmap(composed);
+
+                WriteableBitmap? previousFrameBackup = null;
+
+                int prevLeft = 0, prevTop = 0, prevWidth = 0, prevHeight = 0;
+                var prevDisposal = 0;
+
+                foreach (var frame in decoder.Frames)
+                {
+                    var metadata = frame.Metadata as BitmapMetadata;
+
+                    var left = ImageGifHelper.GetShort(metadata, "/imgdesc/Left");
+                    var top = ImageGifHelper.GetShort(metadata, "/imgdesc/Top");
+                    var disposal = ImageGifHelper.GetShort(metadata, "/grctlext/Disposal");
+
+                    var frameWidth = frame.PixelWidth;
+                    var frameHeight = frame.PixelHeight;
+
+                    // 🔁 1. Apply previous disposal
+                    switch (prevDisposal)
+                    {
+                        case 2: // Restore to background
+                            ImageGifHelper.ClearRegion(composed, prevLeft, prevTop, prevWidth, prevHeight);
+                            break;
+
+                        case 3: // Restore to previous
+                            if (previousFrameBackup is { })
+                            {
+                                ImageGifHelper.CopyBitmap(previousFrameBackup, composed);
+                            }
+
+                            break;
+                    }
+
+                    // 💾 2. Backup if current frame requires it
+                    if (disposal == 3)
+                    {
+                        previousFrameBackup = composed.Clone();
+                        previousFrameBackup.Freeze();
+                    }
+                    else
+                    {
+                        previousFrameBackup = null;
+                    }
+
+                    // 🧩 3. Blend frame into canvas
+                    ImageGifHelper.BlendFrame(composed, frame, left, top);
+
+                    // 📸 4. Snapshot
+                    //var snapshot = composed.Clone();
+                    //snapshot.Freeze();
+
+                    var snapshot = new WriteableBitmap(composed);
+                    snapshot.Freeze();
+
+                    result.Add(snapshot);
+
+                    // store for next loop
+                    prevDisposal = disposal;
+                    prevLeft = left;
+                    prevTop = top;
+                    prevWidth = frameWidth;
+                    prevHeight = frameHeight;
+                }
+
+                return result;
+            });
+        }
+
+        /// <summary>
+        /// Creates the gif.
+        /// The gif is slightly bigger for now
+        /// Sources:
+        /// https://stackoverflow.com/questions/18719302/net-creating-a-looping-gif-using-gifbitmapencoder
+        /// </summary>
+        /// <param name="path">The path to the folder.</param>
+        /// <param name="target">The target path.</param>
+        /// <param name="delayMs">Optional delay between frames in milliseconds.</param>
+        internal static void CreateGif(string path, string target, int delayMs = 100)
+        {
+            //get all allowed files from target folder
+            var lst = FileHelper.GetFilesByExtensionFullPath(path, ImagingResources.Appendix);
+
+            lst = lst.SortNaturally();
+
+            //collect and convert all images
+            var btm = lst.ConvertAll(ImageStream.GetOriginalBitmap);
+
+            if (btm == null || btm.Count == 0)
+            {
+                return;
+            }
+
+            GifCreator(btm, target, delayMs);
+        }
+
+        /// <summary>
+        /// Creates the GIF.
+        /// </summary>
+        /// <param name="path">The path.</param>
+        /// <param name="target">The target.</param>
+        /// <param name="delayMs">Optional delay between frames in milliseconds.</param>
+        internal static void CreateGif(List<string> path, string target, int delayMs = 100)
+        {
+            //collect and convert all images
+            var btm = path.ConvertAll(ImageStream.GetOriginalBitmap);
+
+            if (btm == null || btm.Count == 0)
+            {
+                return;
+            }
+
+            GifCreator(btm, target, delayMs);
+        }
+
+        /// <summary>
+        ///     Creates the GIF.
+        /// </summary>
+        /// <param name="frames">The frames.</param>
+        /// <param name="target">The target.</param>
+        internal static void CreateGif(IEnumerable<FrameInfo>? frames, string target)
+        {
+            if (frames == null)
+            {
+                return;
+            }
+
+            GifCreator(frames, target);
+        }
+
+        /// <summary>
+        /// Create the gif with a fixed delay.
+        /// </summary>
+        /// <param name="btm">A list of Bitmaps.</param>
+        /// <param name="target">The target.</param>
+        /// <param name="delayMs">The delay ms.</param>
+        private static void GifCreator(IEnumerable<Bitmap> btm, string target, int delayMs)
+        {
+            var gEnc = new GifBitmapEncoder();
+            var gifDelay = (ushort)(delayMs / 10);
+
+            foreach (var bmpImage in btm)
+            {
+                var src = ConvertToBitmapSource(bmpImage);
+                var metadata = new BitmapMetadata(ImagingResources.GifMetadata);
+
+                metadata.SetQuery(ImagingResources.GifMetadataQueryDelay, gifDelay);
+                // Optional but recommended: Set Disposal method to "Restore to Background" (2)
+                // This prevents transparent frames from stacking on top of each other.
+                metadata.SetQuery(ImagingResources.GifMetadataQueryDisposal, (byte)2);
+
+                gEnc.Frames.Add(BitmapFrame.Create(src, null, metadata, null));
+            }
+
+            SaveWithLoopingExtension(gEnc, target);
+        }
+
+        /// <summary>
+        /// Creates the GIF from FrameInfo.
+        /// </summary>
+        /// <param name="frames">The frames.</param>
+        /// <param name="target">The target.</param>
+        private static void GifCreator(IEnumerable<FrameInfo>? frames, string target)
+        {
+            if (frames == null) return;
+
+            var gEnc = new GifBitmapEncoder();
+
+            foreach (var frameInfo in frames)
+            {
+                var img = frameInfo.Image;
+
+                var bmpData = img.LockBits(
+                    new Rectangle(0, 0, img.Width, img.Height),
+                    ImageLockMode.ReadOnly,
+                    PixelFormat.Format32bppArgb);
+
+                try
+                {
+                    var bitmapSource = BitmapSource.Create(
+                        img.Width,
+                        img.Height,
+                        img.HorizontalResolution,
+                        img.VerticalResolution,
+                        PixelFormats.Bgra32,
+                        null,
+                        bmpData.Scan0,
+                        img.Height * bmpData.Stride,
+                        bmpData.Stride);
+
+                    var metadata = new BitmapMetadata(ImagingResources.GifMetadata);
+                    metadata.SetQuery(ImagingResources.GifMetadataQueryDelay, (ushort)(frameInfo.DelayTime * 100));
+
+                    gEnc.Frames.Add(BitmapFrame.Create(bitmapSource, null, metadata, null));
+                }
+                finally
+                {
+                    img.UnlockBits(bmpData);
+                }
+            }
+
+            SaveWithLoopingExtension(gEnc, target);
+        }
+
+        /// <summary>
+        /// Helper method to inject the Netscape looping extension safely and efficiently.
+        /// </summary>
+        /// <param name="gEnc">The GifBitmapEncoder containing the image data.</param>
+        /// <param name="target">The target file path.</param>
+        private static void SaveWithLoopingExtension(GifBitmapEncoder gEnc, string target)
+        {
+            using var ms = new MemoryStream();
+            gEnc.Save(ms);
+            var fileBytes = ms.ToArray();
+
+            // NETSCAPE2.0 Application Extension (loops forever)
+            var applicationExtension = new byte[]
+            {
+                33, 255, 11, 78, 69, 84, 83, 67, 65, 80, 69, 50, 46, 48, 3, 1, 0, 0, 0
+            };
+
+            // GIF Header (6) + Logical Screen Descriptor (7) = 13 bytes
+            var insertionIndex = 13;
+
+            // Byte 10 contains the packed fields.
+            // Bit 7 (0x80) indicates if a Global Color Table (GCT) is present.
+            var hasGlobalColorTable = (fileBytes[10] & 0x80) != 0;
+
+            if (hasGlobalColorTable)
+            {
+                // The size of the GCT is determined by the lower 3 bits of byte 10.
+                // Size = 3 * 2^(value + 1)
+                var gctSizeValue = fileBytes[10] & 0x07;
+                var gctSize = 3 * (1 << (gctSizeValue + 1));
+
+                // Push the insertion index past the Global Color Table
+                insertionIndex += gctSize;
+            }
+
+            // Write directly to the file stream to avoid large memory allocations and LINQ overhead
+            using var fs = new FileStream(target, FileMode.Create, FileAccess.Write, FileShare.None);
+
+            // 1. Write the Header, Logical Screen Descriptor, and optional Global Color Table
+            fs.Write(fileBytes, 0, insertionIndex);
+
+            // 2. Inject the Netscape looping extension
+            fs.Write(applicationExtension, 0, applicationExtension.Length);
+
+            // 3. Write the rest of the original GIF data
+            fs.Write(fileBytes, insertionIndex, fileBytes.Length - insertionIndex);
+        }
+
+        /// <summary>
+        /// Helper method to safely convert System.Drawing.Bitmap to WPF BitmapSource
+        /// while perfectly preserving transparency.
+        /// </summary>
+        /// <param name="bitmap">The bitmap.</param>
+        /// <returns>Image as BitmapSource.</returns>
+        private static BitmapSource ConvertToBitmapSource(Bitmap bitmap)
+        {
+            using var ms = new MemoryStream();
+            // Saving as PNG preserves the Alpha channel
+            bitmap.Save(ms, ImageFormat.Png);
+            ms.Position = 0;
+
+            var bitmapImage = new BitmapImage();
+            bitmapImage.BeginInit();
+            bitmapImage.CacheOption = BitmapCacheOption.OnLoad;
+            bitmapImage.StreamSource = ms;
+            bitmapImage.EndInit();
+            bitmapImage.Freeze(); // Freezing for WPF cross-thread usage
+
+            return bitmapImage;
+        }
+    }
+}

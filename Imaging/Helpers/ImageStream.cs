@@ -1,0 +1,1133 @@
+﻿/*
+ * COPYRIGHT:   See COPYING in the top level directory
+ * PROJECT:     Imaging.Helpers
+ * FILE:        ImageStream.cs
+ * PURPOSE:     Does all the leg work for the Image operations
+ * PROGRAMMER:  Peter Geinitz (Wayfarer)
+ * SOURCE:      https://www.csharphelper.com/howtos/howto_colorize2.html
+ */
+
+// ReSharper disable MemberCanBeInternal
+// ReSharper disable MissingSpace
+
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Threading.Tasks;
+using System.Windows.Media.Imaging;
+using Extended.Extensions;
+using Imaging.Enums;
+using Mathematics.Constants;
+
+namespace Imaging.Helpers
+{
+    /// <summary>
+    ///     Loads a BitMapImage out of a specific path
+    ///     Can Combine two Images and returns a new one
+    /// </summary>
+    public static class ImageStream
+    {
+        /// <summary>
+        /// Gets the bitmap image file stream asynchronous.
+        /// </summary>
+        /// <param name="filePath">The file path.</param>
+        /// <param name="width">The width.</param>
+        /// <returns>Returns a BitmapImage if successful; otherwise, null.</returns>
+        public static async Task<BitmapImage?> GetBitmapImageFileStreamAsync(string filePath, int width)
+        {
+            if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath)) return null;
+
+            return await Task.Run(async () =>
+            {
+                try
+                {
+                    // Read header bytes to check for plugin support. This used to be
+                    // File.ReadAllBytes (synchronous) inside Task.Run - meaning the thread-pool
+                    // thread was held hostage for the entire disk read, not just the decode. With
+                    // ReadAllBytesAsync, the actual I/O wait happens via the OS's async I/O
+                    // completion mechanism and doesn't occupy a thread at all; the thread is only
+                    // needed again once bytes are ready, for the (much shorter) CPU-bound decode.
+                    var bytes = await File.ReadAllBytesAsync(filePath);
+                    var headerLen = Math.Min(16, bytes.Length);
+                    var header = new byte[headerLen];
+                    Array.Copy(bytes, header, headerLen);
+
+                    // Check if a registered plugin can handle this file format (e.g., WebP, PPM)
+                    if (ImageDecoderPluginRegistry.Instance.TryGetDecoder(header, out var plugin))
+                    {
+                        Trace.WriteLine($"Decoder found: {plugin.Name}");
+
+                        // Pass the bytes already read above rather than the path - this is what
+                        // actually eliminates the double read: it used to be plugin.Decode(filePath),
+                        // which had every plugin re-open and re-read the whole file from disk a
+                        // second time, right after we'd just read it here for the header sniff.
+                        using var gdiBitmap = plugin.Decode(bytes);
+
+                        Trace.WriteLine(
+                            $"Decoder returns Bitmap: {gdiBitmap.Width}x{gdiBitmap.Height}, " +
+                            $"PixelFormat={gdiBitmap.PixelFormat}");
+
+                        return ConvertBitmapToBitmapSource(gdiBitmap, width);
+                    }
+
+                    // Fallback to standard WPF stream loading for native formats (PNG, JPEG, etc.)
+                    var bitmapImage = new BitmapImage();
+                    using var ms = new MemoryStream(bytes);
+                    bitmapImage.BeginInit();
+                    bitmapImage.CacheOption = BitmapCacheOption.OnLoad;
+                    bitmapImage.DecodePixelWidth = width;
+                    bitmapImage.StreamSource = ms;
+                    bitmapImage.EndInit();
+                    bitmapImage.Freeze();
+
+                    return bitmapImage;
+                }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine($"Error loading from '{filePath}':");
+                    Trace.WriteLine(ex.ToString());
+                    return null;
+                }
+            });
+        }
+
+        /// <summary>
+        ///     Get the bitmap file.
+        ///     Will  leak like crazy. Only use it if we load Icons or something.
+        /// </summary>
+        /// <param name="path">The path.</param>
+        /// <returns>
+        ///     The Image as <see cref="Bitmap" />.
+        /// </returns>
+        /// <exception cref="IOException">File not Found</exception>
+        internal static Bitmap? LoadBitmapFromFile(string? path)
+        {
+            ImageHelper.ValidateFilePath(path);
+
+            // Load the bitmap from the file
+            using var originalBitmap = new Bitmap(path);
+            // Return a defensive copy
+            return new Bitmap(path, true);
+        }
+
+        /// <summary>
+        ///     Gets the original bitmap file.
+        ///     Takes longer but produces a higher quality
+        /// </summary>
+        /// <param name="path">The path.</param>
+        /// <returns>
+        ///     The Image in Original size
+        /// </returns>
+        /// <exception cref="IOException">
+        /// </exception>
+        /// <exception cref="ArgumentException"></exception>
+        /// <exception cref="NotSupportedException"></exception>
+        /// <exception cref="InvalidOperationException"></exception>
+        internal static Bitmap? GetOriginalBitmap(string? path)
+        {
+            ImageHelper.ValidateFilePath(path);
+
+            try
+            {
+                var bytes = File.ReadAllBytes(path);
+
+                // 1. Ask the plugin registry if any loaded plugin recognizes the TRUE format
+                if (ImageDecoderPluginRegistry.Instance.TryGetDecoder(bytes, out var plugin))
+                {
+                    // Pass the bytes already read above rather than the path - same fix as
+                    // GetBitmapImageFileStreamAsync: this call used to be plugin.Decode(path),
+                    // which had the plugin re-read the whole file from disk a second time.
+                    return plugin.Decode(bytes);
+                }
+
+                // 2. If no plugin claims it, fall back to native GDI+
+                using var ms = new MemoryStream(bytes);
+                using var temp = Image.FromStream(ms, useEmbeddedColorManagement: false, validateImageData: false);
+
+                // 3. Fully decouple by cloning pixel data
+                var bmp = new Bitmap(temp.Width, temp.Height, PixelFormat.Format32bppArgb); // Prevent indexed crashes
+                using var g = Graphics.FromImage(bmp);
+                g.DrawImage(temp, new Rectangle(0, 0, temp.Width, temp.Height));
+
+                return bmp;
+            }
+            catch (Exception ex)
+            {
+                ImageHelper.HandleException(ex);
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Resizes an image
+        /// </summary>
+        /// <param name="image">The image to resize</param>
+        /// <param name="width">The new width in pixels</param>
+        /// <param name="height">The new height in pixels</param>
+        /// <returns>
+        /// A resized version of the original image as <see cref="Bitmap" />.
+        /// </returns>
+        /// <exception cref="ArgumentNullException">if Image is null</exception>
+        /// <exception cref="ArgumentException"></exception>
+        /// <exception cref="InsufficientMemoryException"></exception>
+        internal static Bitmap? BitmapScaling(Bitmap? image, int width, int height)
+        {
+            ImageHelper.ValidateImage(nameof(BitmapScaling), image);
+
+            // 1. Create the destination bitmap
+            var btm = new Bitmap(width, height, PixelFormat.Format32bppPArgb);
+            btm.SetResolution(image!.HorizontalResolution, image.VerticalResolution);
+
+            try
+            {
+                using var graph = Graphics.FromImage(btm);
+                // Same high-quality settings
+                graph.CompositingMode = CompositingMode.SourceCopy;
+                graph.CompositingQuality = CompositingQuality.HighQuality;
+                graph.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                graph.SmoothingMode = SmoothingMode.HighQuality;
+                graph.PixelOffsetMode = PixelOffsetMode.HighQuality;
+
+                graph.DrawImage(image, 0, 0, width, height);
+
+                // 2. Return the 'btm' directly. Do NOT wrap it in 'new Bitmap(btm)'
+                return btm;
+            }
+            catch (Exception ex)
+            {
+                // 3. If it fails, clean up the memory immediately
+                btm.Dispose();
+                ImageHelper.HandleException(ex);
+                throw;
+            }
+        }
+
+        /// <summary>
+        ///     Bitmaps the scaling.
+        /// </summary>
+        /// <param name="image">The image.</param>
+        /// <param name="scaling">The scaling.</param>
+        /// <returns>
+        ///     A resized version of the original image as <see cref="Bitmap" />.
+        /// </returns>
+        /// <exception cref="ArgumentNullException">if Image is null</exception>
+        internal static Bitmap BitmapScaling(Bitmap? image, float scaling)
+        {
+            ImageHelper.ValidateImage(nameof(BitmapScaling), image);
+
+            var width = (int)(image!.Width * scaling);
+            var height = (int)(image.Height * scaling);
+
+            //needed because of: A Graphics object cannot be created from an image that has an indexed pixel format
+            var btm = new Bitmap(width, height);
+            //fix Resolution
+            btm.SetResolution(image.HorizontalResolution, image.VerticalResolution);
+
+            using (var graph = Graphics.FromImage(btm))
+            {
+                graph.CompositingMode = CompositingMode.SourceCopy;
+                graph.CompositingQuality = CompositingQuality.HighQuality;
+                graph.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                graph.SmoothingMode = SmoothingMode.HighQuality;
+                graph.PixelOffsetMode = PixelOffsetMode.HighQuality;
+
+                var rect = new Rectangle(0, 0, width, height);
+
+                using var wrapMode = new ImageAttributes();
+                wrapMode.SetWrapMode(WrapMode.TileFlipXY);
+                graph.DrawImage(image, rect, 0, 0, image.Width, image.Height, GraphicsUnit.Pixel, wrapMode);
+            }
+
+            return new Bitmap(btm);
+        }
+
+        /// <summary>
+        ///     Combines the bitmaps overlays them and merges them into one Image
+        ///     Can and will throw Exceptions as part of nameof(ToBitmapImage)
+        ///     The size will be trimmed to the size of the first Image
+        /// </summary>
+        /// <param name="files">The files.</param>
+        /// <returns>
+        ///     a new Bitmap with all combined Images
+        /// </returns>
+        /// <exception cref="ArgumentNullException">if file is null or Empty</exception>
+        internal static Bitmap? CombineBitmap(List<string> files)
+        {
+            if (files.IsNullOrEmpty())
+            {
+                var innerException =
+                    new ArgumentNullException(string.Concat(nameof(CombineBitmap), ImagingResources.Spacing,
+                        nameof(files)));
+                throw new ArgumentNullException(ImagingResources.ErrorWrongParameters, innerException);
+            }
+
+            //read all images into memory
+            var images = new List<Bitmap>();
+
+            foreach (var image in files)
+            {
+                //create a Bitmap from the file and add it to the list
+                if (!File.Exists(image))
+                {
+                    Trace.WriteLine(string.Concat(ImagingResources.ErrorFileNotFound, image));
+                    continue;
+                }
+
+                var bitmap = new Bitmap(image);
+
+                images.Add(bitmap);
+            }
+
+            if (images.IsNullOrEmpty())
+            {
+                Trace.WriteLine(ImagingResources.ErrorFileNotFound);
+                return null;
+            }
+
+            //get the correct size of the Final Image
+            var bmp = images[0];
+
+            //create a bitmap to hold the combined image
+            var btm = new Bitmap(bmp.Width, bmp.Height);
+
+            //get a graphics object from the image so we can draw on it
+            using (var graph = Graphics.FromImage(btm))
+            {
+                //go through each image and draw it on the final image
+                foreach (var image in images)
+                {
+                    graph.DrawImage(image,
+                        new Rectangle(0, 0, image.Width, image.Height));
+                }
+            }
+
+            foreach (var image in images)
+            {
+                image.Dispose();
+            }
+
+            //before return please Convert
+            return btm;
+        }
+
+        /// <summary>
+        ///     Combines the bitmaps.
+        /// </summary>
+        /// <param name="image">The original image.</param>
+        /// <param name="overlay">The overlay image.</param>
+        /// <param name="x">The x position.</param>
+        /// <param name="y">The y position.</param>
+        /// <returns>Combined Image</returns>
+        /// <exception cref="ArgumentNullException"></exception>
+        internal static Bitmap? CombineBitmap(Bitmap? image, Bitmap? overlay, int x, int y)
+        {
+            ImageHelper.ValidateImage(nameof(CombineBitmap), image);
+
+            if (overlay == null)
+            {
+                var innerException = new ArgumentNullException(string.Concat(nameof(CombineBitmap),
+                    ImagingResources.Spacing, nameof(overlay)));
+                throw new ArgumentNullException(ImagingResources.ErrorWrongParameters, innerException);
+            }
+
+            //get a graphics object from the image so we can draw on it
+            using var graph = Graphics.FromImage(image!);
+
+            graph.DrawImage(overlay,
+                new Rectangle(x, y, overlay.Width, overlay.Height));
+
+            return image;
+        }
+
+        /// <summary>
+        ///     Cuts a piece out of a bitmap.
+        /// </summary>
+        /// <param name="image">The image.</param>
+        /// <param name="x">The x.</param>
+        /// <param name="y">The y.</param>
+        /// <param name="height">The height.</param>
+        /// <param name="width">The width.</param>
+        /// <returns>The cut Image</returns>
+        /// <exception cref="ArgumentNullException"></exception>
+        internal static Bitmap? CutBitmap(Bitmap? image, int x, int y, int height, int width)
+        {
+            ImageHelper.ValidateImage(nameof(CutBitmap), image);
+
+            var btm = new Bitmap(width, height);
+
+            using var graph = Graphics.FromImage(btm);
+            graph.CompositingMode = CompositingMode.SourceCopy;
+            graph.CompositingQuality = CompositingQuality.HighQuality;
+            graph.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            graph.SmoothingMode = SmoothingMode.HighQuality;
+            graph.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            graph.Clear(Color.White);
+            var rect = new Rectangle(x, y, width, height);
+
+            graph.DrawImage(image!, 0, 0, rect, GraphicsUnit.Pixel);
+
+            return btm;
+        }
+
+        /// <summary>
+        ///     Cuts a bitmap.
+        /// </summary>
+        /// <param name="image">The image.</param>
+        /// <param name="x">The x.</param>
+        /// <param name="y">The y.</param>
+        /// <param name="height">The height.</param>
+        /// <param name="width">The width.</param>
+        /// <returns>List of cut Images</returns>
+        /// <exception cref="ArgumentNullException"></exception>
+        internal static List<Bitmap?> CutBitmaps(Bitmap? image, int x, int y, int height, int width)
+        {
+            ImageHelper.ValidateImage(nameof(CutBitmaps), image);
+
+            //read all images into memory
+            var images = new List<Bitmap?>(x * y);
+
+            for (var j = 0; j < y; j++)
+            for (var i = 0; i < x; i++)
+            {
+                var img = CutBitmap(image, i * width, j * height, height, width);
+                images.Add(img);
+            }
+
+            return images;
+        }
+
+        /// <summary>
+        ///     Erases the rectangle from an Image.
+        /// </summary>
+        /// <param name="image">The image.</param>
+        /// <param name="x">The x.</param>
+        /// <param name="y">The y.</param>
+        /// <param name="height">The height.</param>
+        /// <param name="width">The width.</param>
+        /// <returns>Original Image with the erased area</returns>
+        /// <exception cref="ArgumentNullException"></exception>
+        internal static Bitmap? EraseRectangle(Bitmap? image, int x, int y, int height, int width)
+        {
+            ImageHelper.ValidateImage(nameof(EraseRectangle), image);
+
+            using var graph = Graphics.FromImage(image!);
+
+            graph.CompositingMode = CompositingMode.SourceCopy;
+
+            using var br = new SolidBrush(Color.FromArgb(0, 255, 255, 255));
+
+            graph.FillRectangle(br, new Rectangle(x, y, width, height));
+
+            return image;
+        }
+
+        /// <summary>
+        ///     Rotates the image.
+        /// </summary>
+        /// <param name="image">The image.</param>
+        /// <param name="degree">The angle in degrees</param>
+        /// <returns>
+        ///     Rotated Image
+        /// </returns>
+        /// <exception cref="ArgumentNullException">if Image is null</exception>
+        /// <exception cref="OverflowException">Degrees have a certain allowed radius</exception>
+        internal static Bitmap? RotateImage(Bitmap? image, int degree)
+        {
+            ImageHelper.ValidateImage(nameof(RotateImage), image);
+
+            //no need to do anything
+            if (degree is 360 or 0)
+            {
+                return image;
+            }
+
+            if (degree is > 360 or < -360)
+            {
+                var innerException = new OverflowException(nameof(degree));
+                throw new OverflowException(string.Concat(ImagingResources.ErrorWrongParameters, degree),
+                    innerException);
+            }
+
+            //Calculate the size of the new Bitmap because if we rotate the Image it will be bigger
+            var wOver = image!.Width / 2.0f;
+            var hOver = image.Height / 2.0f;
+
+            // Get the coordinates of the corners, taking the origin to be the centre of the bitmap.
+            PointF[] corners = { new(-wOver, -hOver), new(+wOver, -hOver), new(+wOver, +hOver), new(-wOver, +hOver) };
+
+            for (var i = 0; i < 4; i++)
+            {
+                var point = corners[i];
+                corners[i] =
+                    new PointF(
+                        (float)(point.X * ExtendedMath.CalcCos(degree) - point.Y * ExtendedMath.CalcSin(degree)),
+                        (float)(point.X * ExtendedMath.CalcSin(degree) + point.Y * ExtendedMath.CalcCos(degree)));
+            }
+
+            // Find the min and max x and y coordinates.
+            var minX = corners[0].X;
+            var maxX = minX;
+            var minY = corners[0].Y;
+            var maxY = minY;
+
+            for (var i = 1; i < 4; i++)
+            {
+                var p = corners[i];
+                minX = Math.Min(minX, p.X);
+                maxX = Math.Max(maxX, p.X);
+                minY = Math.Min(minY, p.Y);
+                maxY = Math.Max(maxY, p.Y);
+            }
+
+            // Get the size of the new bitmap.
+            var newSize = new SizeF(maxX - minX, maxY - minY);
+            // create it.
+            var btm = new Bitmap((int)Math.Ceiling(newSize.Width), (int)Math.Ceiling(newSize.Height));
+            //fix Resolution
+            btm.SetResolution(image.HorizontalResolution, image.VerticalResolution);
+
+            //  draw the old bitmap on it.
+            using var graph = Graphics.FromImage(btm);
+            graph.TranslateTransform(newSize.Width / 2.0f, newSize.Height / 2.0f);
+            graph.RotateTransform(degree);
+            graph.TranslateTransform(-image.Width / 2.0f, -image.Height / 2.0f);
+            graph.DrawImage(image, 0, 0);
+
+            return btm;
+        }
+
+        /// <summary>
+        ///     Crops the image.
+        ///     Non Edges are defined as transparent
+        /// </summary>
+        /// <param name="image">The image.</param>
+        /// <returns>Coped Image</returns>
+        /// <exception cref="ArgumentNullException"></exception>
+        internal static Bitmap CropImage(Bitmap image)
+        {
+            ArgumentNullException.ThrowIfNull(image);
+
+            var bounds = ImageHelper.GetNonTransparentBounds(image);
+
+            if (bounds.Width <= 0 || bounds.Height <= 0)
+                // Return an empty image or handle this case as needed
+            {
+                return new Bitmap(1, 1);
+            }
+
+            var croppedBitmap = new Bitmap(bounds.Width, bounds.Height);
+            using var graphics = Graphics.FromImage(croppedBitmap);
+            graphics.DrawImage(image, 0, 0, bounds, GraphicsUnit.Pixel);
+
+            return croppedBitmap;
+        }
+
+        /// <summary>
+        ///     Saves the bitmap.
+        /// </summary>
+        /// <param name="image">The image.</param>
+        /// <param name="path">The path where we want to save it.</param>
+        /// <param name="format">The Image format.</param>
+        /// <exception cref="ArgumentNullException">Wrong parameters</exception>
+        /// <exception cref="IOException">File already exists</exception>
+        /// <exception cref="ExternalException">Errors with the Path</exception>
+        internal static void SaveBitmap(Bitmap? image, string? path, ImageFormat? format)
+        {
+            ImageHelper.ValidateImage(nameof(SaveBitmap), image);
+
+            if (format == null)
+            {
+                var innerException =
+                    new ArgumentNullException(string.Concat(nameof(SaveBitmap), ImagingResources.Spacing,
+                        nameof(format)));
+                throw new ArgumentNullException(ImagingResources.ErrorWrongParameters, innerException);
+            }
+
+            if (string.IsNullOrEmpty(path))
+            {
+                var innerException =
+                    new ArgumentNullException(string.Concat(nameof(SaveBitmap), ImagingResources.Spacing,
+                        nameof(path)));
+                throw new ArgumentNullException(ImagingResources.ErrorWrongParameters, innerException);
+            }
+
+            if (File.Exists(path))
+            {
+                var count = 1;
+
+                var fileNameOnly = Path.GetFileNameWithoutExtension(path);
+                var extension = Path.GetExtension(path);
+                var directory = Path.GetDirectoryName(path);
+                if (!Directory.Exists(directory))
+                {
+                    return;
+                }
+
+                var newPath = path;
+
+                while (File.Exists(newPath))
+                {
+                    var tempFileName = $"{fileNameOnly}({count++})";
+                    newPath = Path.Combine(directory, tempFileName + extension);
+                }
+
+                SaveBitmap(image, newPath, format);
+            }
+
+            try
+            {
+                image!.Save(path, format);
+            }
+            catch (ExternalException ex)
+            {
+                Trace.WriteLine(ex);
+                throw;
+            }
+        }
+
+        /// <summary>
+        ///     Converts White to Transparent.
+        /// </summary>
+        /// <param name="image">The image.</param>
+        /// <param name="threshold">The threshold when the color is still white.</param>
+        /// <returns>The Transparent Image</returns>
+        /// <exception cref="ArgumentNullException">Wrong parameters</exception>
+        internal static Bitmap? ConvertWhiteToTransparent(Bitmap? image, int threshold)
+        {
+            ImageHelper.ValidateImage(nameof(ConvertWhiteToTransparent), image);
+
+            //use our new Format
+            var dbm = DirectBitmap.GetInstance(image);
+
+            //255,255,255 is White
+            var replacementColor = Color.FromArgb(255, 255, 255);
+            var pixelsToSet = new List<(int x, int y, Color color)>();
+
+            for (var x = 0; x < dbm.Width; x++)
+            for (var y = 0; y < dbm.Height; y++)
+            {
+                var color = dbm.GetPixel(x, y);
+
+                //not in the area? continue, 255 is White
+                if (255 - color.R >= threshold || 255 - color.G >= threshold || 255 - color.B >= threshold)
+                {
+                    continue;
+                }
+
+                //replace Value under the threshold with pure White
+                pixelsToSet.Add((x, y, replacementColor));
+            }
+
+            try
+            {
+                dbm.SetPixels(pixelsToSet);
+
+                //get the Bitmap
+                var btm = dbm.ToBitmap();
+                //make Transparent
+                btm!.MakeTransparent(replacementColor);
+                //cleanup
+                dbm.Dispose();
+                return btm;
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"{ImagingResources.ErrorPixel} {ex.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>
+        ///     Gets the pixel.
+        /// </summary>
+        /// <param name="image">The image.</param>
+        /// <param name="point">The point.</param>
+        /// <returns>
+        ///     The Color at the point
+        /// </returns>
+        /// <exception cref="ArgumentNullException">Image was null</exception>
+        /// <exception cref="ArgumentOutOfRangeException">Point was out of bound.</exception>
+        internal static Color GetPixel(Bitmap? image, Point point)
+        {
+            ImageHelper.ValidateImage(nameof(GetPixel), image);
+
+            if (point.X < 0 || point.X >= image!.Width || point.Y < 0 || point.Y >= image.Height)
+            {
+                throw new ArgumentOutOfRangeException(nameof(point), ImagingResources.ErrorOutOfBounds);
+            }
+
+            //use our new Format
+            using var dbm = DirectBitmap.GetInstance(image);
+            return dbm.GetPixel(point.X, point.Y);
+        }
+
+        /// <summary>
+        ///     Gets the pixel.
+        /// </summary>
+        /// <param name="image">The image.</param>
+        /// <param name="point">The point.</param>
+        /// <param name="radius">The radius.</param>
+        /// <returns>
+        ///     The Color at the Point
+        /// </returns>
+        /// <exception cref="ArgumentNullException">image was null.</exception>
+        /// <exception cref="ArgumentOutOfRangeException">
+        ///     radius or point is out of bounds.
+        /// </exception>
+        internal static Color GetPixel(Bitmap? image, Point point, int radius)
+        {
+            ImageHelper.ValidateImage(nameof(GetPixel), image);
+
+            if (radius < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(radius), ImagingResources.ErrorRadius);
+            }
+
+            if (point.X < 0 || point.X >= image!.Width || point.Y < 0 || point.Y >= image.Height)
+            {
+                throw new ArgumentOutOfRangeException(nameof(point), ImagingResources.ErrorOutOfBounds);
+            }
+
+            var points = ImageHelper.GetCirclePoints(point, radius, image.Height, image.Width);
+
+            if (points.Count == 0)
+            {
+                return GetPixel(image, point);
+            }
+
+            // Same full-image-per-point trap the radius SetPixel overload had:
+            // one DirectBitmap for the whole averaging sample instead of one
+            // (leaked, on top of it) GetPixel() call per sampled pixel.
+            using var dbm = DirectBitmap.GetInstance(image);
+
+            int redSum = 0, greenSum = 0, blueSum = 0;
+
+            foreach (var circlePoint in points)
+            {
+                var color = dbm.GetPixel(circlePoint.X, circlePoint.Y);
+                redSum += color.R;
+                greenSum += color.G;
+                blueSum += color.B;
+            }
+
+            return Color.FromArgb(redSum / points.Count, greenSum / points.Count, blueSum / points.Count);
+        }
+
+        /// <summary>
+        ///     Sets the pixel.
+        /// </summary>
+        /// <param name="image">The image.</param>
+        /// <param name="point">The point.</param>
+        /// <param name="color">The color.</param>
+        /// <returns>
+        ///     The changed image as Bitmap
+        /// </returns>
+        /// <exception cref="ArgumentNullException">nameof(image)</exception>
+        internal static Bitmap SetPixel(Bitmap? image, Point point, Color color)
+        {
+            ImageHelper.ValidateImage(nameof(SetPixel), image);
+
+            //use our new Format
+            using var dbm = DirectBitmap.GetInstance(image);
+            dbm.SetPixel(point.X, point.Y, color);
+
+            return dbm.ToBitmap();
+        }
+
+        /// <summary>
+        ///     Adjusts the brightness.
+        /// </summary>
+        /// <param name="image">The image.</param>
+        /// <param name="brightnessFactor">The brightness factor.</param>
+        /// <returns>
+        ///     The changed image as Bitmap
+        /// </returns>
+        internal static Bitmap? AdjustBrightness(Bitmap? image, float brightnessFactor)
+        {
+            ImageHelper.ValidateImage(nameof(GetPixel), image);
+
+            using var source = new DirectBitmap(image);
+            using var dbm = new DirectBitmap(source.Width, source.Height);
+
+            for (var y = 0; y < source.Height; y++)
+            for (var x = 0; x < source.Width; x++)
+            {
+                var pixelColor = source.GetPixel(x, y);
+
+                // Adjust brightness by multiplying each color component by the brightness factor
+                var newRed = ImageHelper.Clamp(pixelColor.R * brightnessFactor);
+                var newGreen = ImageHelper.Clamp(pixelColor.G * brightnessFactor);
+                var newBlue = ImageHelper.Clamp(pixelColor.B * brightnessFactor);
+
+                dbm.SetPixel(x, y, Color.FromArgb(newRed, newGreen, newBlue));
+            }
+
+            return dbm.ToBitmap();
+        }
+
+        /// <summary>
+        ///     Sets the pixel.
+        /// </summary>
+        /// <param name="image">The image.</param>
+        /// <param name="point">The point.</param>
+        /// <param name="color">The color.</param>
+        /// <param name="radius">The radius.</param>
+        /// <returns>The Changed Image</returns>
+        /// <exception cref="ArgumentNullException">nameof(image)</exception>
+        internal static Bitmap? SetPixel(Bitmap? image, Point point, Color color, int radius)
+        {
+            ImageHelper.ValidateImage(nameof(SetPixel), image);
+
+            var points = ImageHelper.GetCirclePoints(point, radius, image!.Height, image.Width);
+
+            // One full-image round trip for the whole brush stamp, not one per
+            // pixel in the circle. DirectBitmap.GetInstance/ToBitmap each copy the
+            // *entire* image; the previous implementation paid that cost once per
+            // point via Aggregate(image, (b, p) => SetPixel(b, p, color)) calling
+            // the single-pixel overload below - O(radius^2 x image size) for one
+            // dab. A brush radius of even a few pixels made a single click
+            // noticeably slow, and a drag (many dabs per second) compounded that
+            // on every stroke - this is what "pencil feels sluggish, no real
+            // strokes possible" actually was.
+            using var dbm = DirectBitmap.GetInstance(image);
+            foreach (var circlePoint in points)
+            {
+                dbm.SetPixel(circlePoint.X, circlePoint.Y, color);
+            }
+
+            return dbm.ToBitmap();
+        }
+
+        /// <summary>
+        ///     Draws a whole batch of pencil/eraser dabs in place: one <c>LockBits</c>, direct row writes,
+        ///     no copies of the image. Consecutive points (and the last point of the previous batch, if
+        ///     supplied) are connected by stamping along the segment, so fast drags don't leave gaps.
+        ///     The colour is written as-is (straight ARGB), so <see cref="Color.Transparent" /> erases.
+        /// </summary>
+        /// <param name="image">The image. Modified in place and returned.</param>
+        /// <param name="points">The points of this batch, in order.</param>
+        /// <param name="previous">Last point of the previous batch of the same stroke, or null at stroke start.</param>
+        /// <param name="color">The colour (or Transparent for the eraser).</param>
+        /// <param name="radius">The brush radius in pixels (0 = single pixel).</param>
+        /// <returns>The same bitmap instance.</returns>
+        internal static Bitmap? DrawStroke(Bitmap? image, IReadOnlyList<Point> points, Point? previous, Color color,
+            int radius)
+        {
+            ImageHelper.ValidateImage(nameof(DrawStroke), image);
+
+            if (points == null || points.Count == 0) return image;
+
+            radius = Math.Max(0, radius);
+            var width = image!.Width;
+            var height = image.Height;
+            var packed = color.ToArgb();
+
+            // Half-width of the disc for every row offset, computed once per batch.
+            var halfWidths = new int[(radius * 2) + 1];
+            for (var dy = -radius; dy <= radius; dy++)
+            {
+                halfWidths[dy + radius] = (int)Math.Sqrt((radius * radius) - (dy * dy));
+            }
+
+            var data = image.LockBits(new Rectangle(0, 0, width, height), ImageLockMode.ReadWrite,
+                PixelFormat.Format32bppArgb);
+
+            try
+            {
+                unsafe
+                {
+                    var scan0 = (byte*)data.Scan0;
+                    var stride = data.Stride;
+                    var step = Math.Max(1.0, radius * 0.35);
+                    var last = previous;
+
+                    foreach (var point in points)
+                    {
+                        if (last is null)
+                        {
+                            StampDisc(scan0, stride, width, height, point.X, point.Y, radius, halfWidths, packed);
+                        }
+                        else
+                        {
+                            var start = last.Value;
+                            double dx = point.X - start.X;
+                            double dy = point.Y - start.Y;
+                            var dist = Math.Sqrt((dx * dx) + (dy * dy));
+                            var n = (int)Math.Ceiling(dist / step);
+
+                            // i starts at 1: the start of the segment was stamped by the previous point.
+                            for (var i = 1; i <= n; i++)
+                            {
+                                var t = i / (double)n;
+                                StampDisc(scan0, stride, width, height,
+                                    (int)Math.Round(start.X + (dx * t)),
+                                    (int)Math.Round(start.Y + (dy * t)),
+                                    radius, halfWidths, packed);
+                            }
+                        }
+
+                        last = point;
+                    }
+                }
+            }
+            finally
+            {
+                image.UnlockBits(data);
+            }
+
+            return image;
+        }
+
+        /// <summary>
+        ///     Writes one filled disc into locked 32bpp ARGB memory, clipped to the image.
+        /// </summary>
+        private static unsafe void StampDisc(byte* scan0, int stride, int width, int height, int cx, int cy,
+            int radius, int[] halfWidths, int packedColor)
+        {
+            for (var dy = -radius; dy <= radius; dy++)
+            {
+                var y = cy + dy;
+                if ((uint)y >= (uint)height) continue;
+
+                var half = halfWidths[dy + radius];
+                var x0 = Math.Max(0, cx - half);
+                var x1 = Math.Min(width - 1, cx + half);
+                if (x0 > x1) continue;
+
+                var row = (int*)(scan0 + ((long)y * stride));
+                for (var x = x0; x <= x1; x++)
+                {
+                    row[x] = packedColor;
+                }
+            }
+        }
+
+        /// <summary>
+        ///     Fills the area with color.
+        /// </summary>
+        /// <param name="image">The image.</param>
+        /// <param name="width">The width.</param>
+        /// <param name="height">The height.</param>
+        /// <param name="color">The color of the shape</param>
+        /// <param name="shape">The shape.</param>
+        /// <param name="shapeParams">The shape parameters.</param>
+        /// <param name="startPoint">The optional starting point (top-left corner) of the rectangle. Defaults to (0, 0).</param>
+        /// <returns>
+        ///     Generates a filter for a certain area
+        /// </returns>
+        /// <exception cref="ArgumentOutOfRangeException">
+        ///     filter - null
+        ///     or
+        ///     shape - null
+        /// </exception>
+        internal static Bitmap FillAreaWithColor(
+            Bitmap image,
+            int? width,
+            int? height,
+            Color color,
+            MaskShape shape,
+            object? shapeParams = null,
+            Point? startPoint = null)
+        {
+            // Validate input
+            ArgumentNullException.ThrowIfNull(image);
+
+            // Default start point
+            var actualStartPoint = startPoint ?? new Point(0, 0);
+
+            // Determine dimensions
+            var actualWidth = width ?? image.Width;
+            var actualHeight = height ?? image.Height;
+
+            using var g = Graphics.FromImage(image);
+            using Brush brush = new SolidBrush(color);
+
+            // Apply mask based on the specified shape
+            switch (shape)
+            {
+                case MaskShape.Rectangle:
+                    g.FillRectangle(brush, new Rectangle(actualStartPoint, new Size(actualWidth, actualHeight)));
+                    break;
+
+                case MaskShape.Circle:
+                    g.FillEllipse(brush, new Rectangle(actualStartPoint, new Size(actualWidth, actualHeight)));
+                    break;
+
+                case MaskShape.Polygon:
+                    if (shapeParams is Point[] points)
+                    {
+                        g.FillPolygon(brush, points);
+                    }
+                    else
+                    {
+                        throw new ArgumentException("Invalid shape parameters for polygon mask.", nameof(shapeParams));
+                    }
+
+                    break;
+
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(shape), shape, "Unsupported shape type");
+            }
+
+            return image;
+        }
+
+        /// <summary>
+        ///     Floods the fill scan line stack.
+        /// </summary>
+        /// <param name="image">The image.</param>
+        /// <param name="x">The x.</param>
+        /// <param name="y">The y.</param>
+        /// <param name="newColor">The new color.</param>
+        /// <returns>Bitmap with filled area</returns>
+        internal static Bitmap? FloodFillScanLineStack(Bitmap? image, int x, int y, Color newColor)
+        {
+            // Create a new bitmap to store the processed image
+            using var dbm = new DirectBitmap(image);
+            using var result = new DirectBitmap(image);
+
+            var oldColor = dbm.GetPixel(x, y);
+            if (oldColor == newColor)
+            {
+                return image; // Return original image if the color is the same
+            }
+
+            var pixelData = new List<(int x, int y, Color color)>();
+
+            var stack = new Stack<(int, int)>();
+            stack.Push((x, y));
+
+            while (stack.Count > 0)
+            {
+                (x, y) = stack.Pop();
+                var x1 = x;
+
+                // Move to the left boundary
+                while (x1 >= 0 && dbm.GetPixel(x1, y) == oldColor)
+                {
+                    x1--;
+                }
+
+                x1++;
+                bool spanBelow;
+                var spanAbove = spanBelow = false;
+
+                // Move to the right boundary
+                while (x1 < dbm.Width && dbm.GetPixel(x1, y) == oldColor)
+                {
+                    pixelData.Add((x1, y, newColor));
+
+                    // Check above
+                    if (!spanAbove && y > 0 && dbm.GetPixel(x1, y - 1) == oldColor)
+                    {
+                        stack.Push((x1, y - 1));
+                        spanAbove = true;
+                    }
+                    else if (spanAbove && y > 0 && dbm.GetPixel(x1, y - 1) != oldColor)
+                    {
+                        spanAbove = false;
+                    }
+
+                    // Check below
+                    if (!spanBelow && y < dbm.Height - 1 && dbm.GetPixel(x1, y + 1) == oldColor)
+                    {
+                        stack.Push((x1, y + 1));
+                        spanBelow = true;
+                    }
+                    else if (spanBelow && y < dbm.Height - 1 && dbm.GetPixel(x1, y + 1) != oldColor)
+                    {
+                        spanBelow = false;
+                    }
+
+                    x1++;
+                }
+            }
+
+            // Convert list to array for SIMD processing
+            var pixelArray = pixelData.ToArray();
+            result.SetPixels(pixelArray);
+            pixelData.Clear();
+
+            // Return the modified image as a Bitmap
+            return result.ToBitmap();
+        }
+
+        /// <summary>
+        ///     Adjusts the color.
+        /// </summary>
+        /// <param name="image">The image.</param>
+        /// <param name="sourceColor">Color of the source.</param>
+        /// <param name="targetColor">Color of the target.</param>
+        /// <returns>Color Adjusted Bitmap</returns>
+        internal static Bitmap AdjustColor(Bitmap image, Color sourceColor, Color targetColor)
+        {
+            // Create a ColorMatrix that transforms sourceColor into targetColor
+            var cm = CreateColorMatrix(sourceColor, targetColor);
+            var attributes = new ImageAttributes();
+            attributes.SetColorMatrix(cm);
+
+            // Create a new image to hold the adjusted image.
+            var result = new Bitmap(image.Width, image.Height);
+            using var g = Graphics.FromImage(result);
+            // Draw the original image on the new image using the color matrix.
+            var rect = new Rectangle(0, 0, image.Width, image.Height);
+            g.DrawImage(image, rect, 0, 0, image.Width, image.Height, GraphicsUnit.Pixel, attributes);
+
+            return result;
+        }
+
+        /// <summary>
+        ///     Creates the color matrix.
+        /// </summary>
+        /// <param name="sourceColor">Color of the source.</param>
+        /// <param name="targetColor">Color of the target.</param>
+        /// <returns>The color matrix</returns>
+        private static ColorMatrix CreateColorMatrix(Color sourceColor, Color targetColor)
+        {
+            // Calculate the difference between source and target colors for each channel
+            var rRatio = targetColor.R / 255f - sourceColor.R / 255f;
+            var gRatio = targetColor.G / 255f - sourceColor.G / 255f;
+            var bRatio = targetColor.B / 255f - sourceColor.B / 255f;
+
+            return new ColorMatrix(new[]
+            {
+                new[] { 1 + rRatio, gRatio, bRatio, 0, 0 }, // Red
+                new[] { rRatio, 1 + gRatio, bRatio, 0, 0 }, // Green
+                new[] { rRatio, gRatio, 1 + bRatio, 0, 0 }, // Blue
+                new float[] { 0, 0, 0, 1, 0 }, // Alpha
+                new float[] { 0, 0, 0, 0, 1 } // Translation
+            });
+        }
+
+        /// <summary>
+        /// Converts a GDI+ Bitmap into a frozen WPF BitmapImage scaled to target dimensions.
+        /// </summary>
+        /// <param name="gdiBitmap">The GDI bitmap.</param>
+        /// <param name="width">The width.</param>
+        /// <returns>Returns a BitmapImage.</returns>
+        private static BitmapImage ConvertBitmapToBitmapSource(Bitmap? gdiBitmap, int width)
+        {
+            using var ms = new MemoryStream();
+
+            // Resize or save directly depending on thumbnail sizing strategy
+            // For thumbnails, saving as PNG into a memory stream is a reliable bridge to WPF
+            gdiBitmap?.Save(ms, ImageFormat.Png);
+            ms.Position = 0;
+
+            var bitmapImage = new BitmapImage();
+            bitmapImage.BeginInit();
+            bitmapImage.CacheOption = BitmapCacheOption.OnLoad;
+            bitmapImage.DecodePixelWidth = width;
+            bitmapImage.StreamSource = ms;
+            bitmapImage.EndInit();
+            bitmapImage.Freeze();
+
+            return bitmapImage;
+        }
+    }
+}

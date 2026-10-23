@@ -1,0 +1,306 @@
+﻿/*
+ * COPYRIGHT:   See COPYING in the top level directory
+ * PROJECT:     Imaging
+ * FILE:        ImageStreamMedia.cs
+ * PURPOSE:     Does all the leg work for the Image operations, in this case the newer Media.Imaging
+ * PROGRAMMER:  Peter Geinitz (Wayfarer)
+ * SOURCE:      https://lodev.org/cgtutor/floodfill.html
+ */
+
+// ReSharper disable MemberCanBeInternal
+
+using System;
+using System.Diagnostics;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.IO;
+using System.Windows;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using Imaging.Helpers;
+using PixelFormat = System.Drawing.Imaging.PixelFormat;
+
+namespace Imaging
+{
+    /// <summary>
+    /// Handle the more newer WPF Libraries.
+    /// </summary>
+    public static class ImageStreamMedia
+    {
+        /// <summary>
+        /// Loads File one Time.
+        /// Can only be used to load an Image Once.
+        /// Use this for huge amounts of images that will be resized, else we will break memory limits.
+        /// </summary>
+        /// <param name="path">Path to the file.</param>
+        /// <param name="width">Target width (optional).</param>
+        /// <param name="height">Target height (optional).</param>
+        /// <returns>
+        /// A <see cref="BitmapImage" />.
+        /// </returns>
+        public static BitmapImage GetBitmapImage(string? path, int width = 0, int height = 0)
+        {
+            ImageHelper.ValidateFilePath(path);
+
+            try
+            {
+                // 1. Read all bytes into memory immediately
+                var buffer = File.ReadAllBytes(path);
+
+                using var ms = new MemoryStream(buffer);
+                var bmp = new BitmapImage();
+                bmp.BeginInit();
+
+                // This ensures WPF doesn't try to go back to the disk for anything
+                bmp.CacheOption = BitmapCacheOption.OnLoad;
+                bmp.StreamSource = ms;
+
+                if (width > 0 && height > 0)
+                {
+                    bmp.DecodePixelWidth = width;
+                    bmp.DecodePixelHeight = height;
+                }
+
+                bmp.EndInit();
+                bmp.Freeze(); // Decouples from the UI thread, making it pure data
+
+                return bmp;
+            }
+            catch (Exception ex)
+            {
+                ImageHelper.HandleException(ex);
+                throw;
+            }
+        }
+
+        /// <summary>
+        ///     Loads file through a stream.
+        ///     Takes longer but can be changed at runtime.
+        /// </summary>
+        /// <param name="path">Path to file.</param>
+        /// <param name="width">Target width (optional).</param>
+        /// <param name="height">Target height (optional).</param>
+        /// <returns>A <see cref="BitmapImage"/> or null if the format is invalid.</returns>
+        public static BitmapImage? GetBitmapImageFileStream(string? path, int width = 0, int height = 0)
+        {
+            ImageHelper.ValidateFilePath(path);
+
+            try
+            {
+                var bmp = new BitmapImage();
+                bmp.BeginInit();
+                // bmp.CreateOptions = BitmapCreateOptions.DelayCreation; is bad it does not load all data immediately.
+                bmp.CacheOption = BitmapCacheOption.OnLoad;
+
+                using var flStream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                bmp.StreamSource = flStream;
+
+                if (width > 0 && height > 0)
+                {
+                    bmp.DecodePixelWidth = width;
+                }
+
+                bmp.EndInit();
+                bmp.Freeze();
+
+                return bmp;
+            }
+            catch (FileFormatException ex)
+            {
+                Trace.Write(ex.ToString());
+                return null;
+            }
+            catch (Exception ex)
+            {
+                ImageHelper.HandleException(ex);
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Converts a <see cref="BitmapSource"/> (including a <see cref="WriteableBitmap"/>) to a
+        /// System.Drawing <see cref="Bitmap"/>. Same as <see cref="BitmapImageToBitmap"/> but accepts
+        /// any <see cref="BitmapSource"/>.
+        /// </summary>
+        internal static Bitmap? BitmapSourceToBitmap(BitmapSource image)
+        {
+            ArgumentNullException.ThrowIfNull(image);
+
+            using var ms = new MemoryStream();
+            var enc = new BmpBitmapEncoder();
+            enc.Frames.Add(BitmapFrame.Create(image));
+            enc.Save(ms);
+
+            ms.Position = 0;
+
+            using var tmp = new Bitmap(ms);
+            return new Bitmap(tmp);
+        }
+
+        /// <summary>
+        /// Builds a frozen <see cref="WriteableBitmap"/> (Bgra32) straight from the GDI+ pixels:
+        /// one memory copy, no PNG encode/decode. <see cref="BitmapToBitmapImage"/> pushes every
+        /// image through <see cref="PngBitmapEncoder"/> and back, which for a large image costs far
+        /// more than the pencil stroke that triggered it.
+        /// </summary>
+        /// <param name="bitmap">The source bitmap.</param>
+        /// <returns>A frozen <see cref="BitmapSource"/> that is safe to hand to the UI thread.</returns>
+        internal static BitmapSource? BitmapToDisplaySource(Bitmap? bitmap)
+        {
+            ImageHelper.ValidateImage(nameof(BitmapToDisplaySource), bitmap);
+
+            var width = bitmap!.Width;
+            var height = bitmap.Height;
+
+            var wbmp = new WriteableBitmap(width, height, 96, 96, PixelFormats.Bgra32, null);
+            var data = bitmap.LockBits(new Rectangle(0, 0, width, height), ImageLockMode.ReadOnly,
+                PixelFormat.Format32bppArgb);
+
+            try
+            {
+                wbmp.Lock();
+                try
+                {
+                    unsafe
+                    {
+                        var src = (byte*)data.Scan0;
+                        var dst = (byte*)wbmp.BackBuffer;
+                        var rowBytes = (long)width * 4;
+
+                        // Strides can differ (GDI+ rows are 4-byte aligned, WriteableBitmap's are too for
+                        // 32bpp, but don't rely on it) - copy row by row.
+                        for (var y = 0; y < height; y++)
+                        {
+                            Buffer.MemoryCopy(src + (long)y * data.Stride, dst + (long)y * wbmp.BackBufferStride,
+                                rowBytes, rowBytes);
+                        }
+                    }
+
+                    wbmp.AddDirtyRect(new Int32Rect(0, 0, width, height));
+                }
+                finally
+                {
+                    wbmp.Unlock();
+                }
+            }
+            finally
+            {
+                bitmap.UnlockBits(data);
+            }
+
+            wbmp.Freeze();
+            return wbmp;
+        }
+
+        /// <summary>
+        /// Converts a <see cref="BitmapImage"/> to a System.Drawing <see cref="Bitmap"/>.
+        /// </summary>
+        /// <param name="image">Source image.</param>
+        /// <returns>A <see cref="Bitmap"/>.</returns>
+        /// <exception cref="ArgumentNullException">If image is null.</exception>
+        internal static Bitmap? BitmapImageToBitmap(BitmapImage image)
+        {
+            ImageHelper.ValidateImage(nameof(BitmapImageToBitmap), image);
+
+            using var ms = new MemoryStream();
+            var enc = new BmpBitmapEncoder();
+            enc.Frames.Add(BitmapFrame.Create(image));
+            enc.Save(ms);
+
+            ms.Position = 0;
+
+            using var tmp = new Bitmap(ms);
+            return new Bitmap(tmp); // deep copy, no stream dependency
+        }
+
+        /// <summary>
+        /// Converts a System.Drawing <see cref="Bitmap"/> to a WPF <see cref="BitmapImage"/>.
+        /// </summary>
+        /// <param name="bitmap">The source bitmap.</param>
+        /// <returns>A <see cref="BitmapImage"/>.</returns>
+        /// <exception cref="ArgumentNullException"></exception>
+        internal static BitmapImage? BitmapToBitmapImage(Bitmap? bitmap)
+        {
+            ImageHelper.ValidateImage(nameof(BitmapToBitmapImage), bitmap);
+
+            var width = bitmap.Width;
+            var height = bitmap.Height;
+
+            // 1. Direct Memory Copy to WriteableBitmap (Your efficient pointer logic)
+            var wbmp = new WriteableBitmap(width, height, 96, 96, PixelFormats.Bgra32, null);
+            var rect = new Rectangle(0, 0, width, height);
+            var bmpData = bitmap.LockBits(rect, ImageLockMode.ReadOnly,
+                PixelFormat.Format32bppArgb);
+
+            wbmp.Lock();
+            unsafe
+            {
+                Buffer.MemoryCopy((void*)bmpData.Scan0, (void*)wbmp.BackBuffer, width * height * 4, width * height * 4);
+            }
+
+            wbmp.AddDirtyRect(new Int32Rect(0, 0, width, height));
+            wbmp.Unlock();
+            bitmap.UnlockBits(bmpData);
+
+            // 2. The Bridge to BitmapImage
+            var bitmapImage = new BitmapImage();
+            using (var stream = new MemoryStream())
+            {
+                // THE GRIP: Changed from BmpBitmapEncoder to PngBitmapEncoder.
+                // PNG natively handles Bgra32 transparency channels without dropping pixel arrays.
+                var encoder = new PngBitmapEncoder();
+                encoder.Frames.Add(BitmapFrame.Create(wbmp));
+                encoder.Save(stream);
+                stream.Position = 0;
+
+                bitmapImage.BeginInit();
+                bitmapImage.CreateOptions = BitmapCreateOptions.PreservePixelFormat;
+                bitmapImage.CacheOption = BitmapCacheOption.OnLoad; // Forces synchronous load before stream closure
+                bitmapImage.StreamSource = stream;
+                bitmapImage.EndInit();
+            }
+
+            bitmapImage.Freeze(); // Detach thread affinity for safe UI thread rendering
+            return bitmapImage;
+        }
+
+        /// <summary>
+        /// Bitmaps to source optimized.
+        /// </summary>
+        /// <param name="bitmap">The bitmap.</param>
+        /// <returns>BitmapImageSource</returns>
+        internal static BitmapSource BitmapToSource(Bitmap bitmap)
+        {
+            var width = bitmap.Width;
+            var height = bitmap.Height;
+
+            // 1. Lock GDI+ bits
+            var rect = new Rectangle(0, 0, width, height);
+            var bmpData = bitmap.LockBits(rect, ImageLockMode.ReadOnly,
+                PixelFormat.Format32bppArgb);
+
+            try
+            {
+                // 2. Create the WPF bitmap directly from the pointer
+                // This is significantly faster than using MemoryStream/Encoders
+                var source = BitmapSource.Create(
+                    width,
+                    height,
+                    96, 96,
+                    PixelFormats.Bgra32,
+                    null,
+                    bmpData.Scan0,
+                    bmpData.Stride * height,
+                    bmpData.Stride);
+
+                // 3. Freeze it so it can be used on the UI thread
+                source.Freeze();
+                return source;
+            }
+            finally
+            {
+                bitmap.UnlockBits(bmpData);
+            }
+        }
+    }
+}
