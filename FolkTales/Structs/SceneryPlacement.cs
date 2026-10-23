@@ -66,15 +66,6 @@ namespace FolkTales.Structs
         public int PrimaryTextureId { get; }
 
         /// <summary>
-        /// Gets the light emission.
-        /// </summary>
-        /// <value>
-        /// The light emission.
-        /// </value>
-        [JsonIgnore]
-        public byte LightEmission => Type.GetLightEmission();
-
-        /// <summary>
         /// Gets the size of the host map's grid cell in metres. Only cell-fitted types (see
         /// <c>SceneryExtensions.IsCellFitted</c>) read it: their mesh and collision are sized from the cell, everything
         /// else is human-scale and ignores it. Not part of equality, so a lookup placement still finds the stored one.

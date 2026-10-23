@@ -135,46 +135,6 @@ namespace FolkTales.Maps
             }
         }
 
-        /// <summary>
-        /// True when any side is a <see cref="WallType.Crawl"/> wall.
-        /// </summary>
-        public bool HasCrawlWall => WallNorth == WallType.Crawl || WallSouth == WallType.Crawl ||
-                                    WallEast == WallType.Crawl || WallWest == WallType.Crawl;
-
-        // --- Advanced Roof Configuration Fields ---
-
-        /// <summary>
-        /// Gets or sets the directional layout pitch orientation of the roof panel structures.
-        /// </summary>
-        /// <value>
-        /// The roof style.
-        /// </value>
-        public RoofOrientation RoofStyle { get; set; } = RoofOrientation.None;
-
-        /// <summary>
-        /// Gets or sets the custom pitched roof slope angle modifier.
-        /// </summary>
-        /// <value>
-        /// The roof angle degrees.
-        /// </value>
-        public float RoofAngleDegrees { get; set; } = 30f;
-
-        /// <summary>
-        /// Gets or sets a value indicating whether triangular attic walls seal empty sides.
-        /// </summary>
-        /// <value>
-        ///   <c>true</c> if [close gable sidewalls]; otherwise, <c>false</c>.
-        /// </value>
-        public bool CloseGableSidewalls { get; set; } = true;
-
-        /// <summary>
-        /// Gets or sets a value indicating whether this room cell bypasses angled roof curves internally.
-        /// </summary>
-        /// <value>
-        ///   <c>true</c> if this instance has flat ceiling; otherwise, <c>false</c>.
-        /// </value>
-        public bool HasFlatCeiling { get; set; } = true;
-
         // --- Smart Legacy Boolean Adapters ---
 
         /// <summary>
@@ -234,17 +194,6 @@ namespace FolkTales.Maps
         public bool HasAnyWall => HasWallNorth || HasWallSouth || HasWallEast || HasWallWest;
 
         /// <summary>
-        /// Gets a value indicating whether this cell is a solid opaque structural block that blocks light.
-        /// </summary>
-        /// <value>
-        ///   <c>true</c> if this instance is solid block; otherwise, <c>false</c>.
-        /// </value>
-        public bool IsSolidBlock => WallNorth == WallType.Solid &&
-                                    WallSouth == WallType.Solid &&
-                                    WallEast == WallType.Solid &&
-                                    WallWest == WallType.Solid;
-
-        /// <summary>
         /// Gets a value indicating whether this cell block is entirely hollow vacuum space.
         /// </summary>
         /// <value>
@@ -259,27 +208,6 @@ namespace FolkTales.Maps
         /// The wall thickness.
         /// </value>
         public float WallThickness { get; set; } = MapDimensions.WallThicknessCells;
-
-        /// <summary>
-        /// Height of door and window openings, as a fraction of the cell's full floor-to-ceiling span.
-        /// </summary>
-        /// <value>
-        /// The opening height ratio.
-        /// </value>
-        public float OpeningHeightRatio { get; set; } = MapDimensions.DefaultOpeningRatio;
-
-        /// <summary>
-        /// How the doors of this cell look (see <see cref="Enums.DoorStyle"/>). Only read where a wall is a door.
-        /// </summary>
-        public DoorStyle DoorStyle { get; set; } = DoorStyle.Wood;
-
-        /// <summary>
-        /// Optional color for walls if no texture is applied.
-        /// </summary>
-        /// <value>
-        /// The color of the wall.
-        /// </value>
-        public Color? WallColor { get; set; }
 
         // --- Floor / Ceiling Space Options ---
 
@@ -312,13 +240,6 @@ namespace FolkTales.Maps
         public float LevelBaseHeight => Z * MapDimensions.LevelHeightCells;
 
         /// <summary>
-        /// Gets whether the cell is indoors: it has a ceiling of its own or is covered from above. Indoor surfaces are
-        /// lit by the fixed indoor ambient and never by the sun or the weather. (A dungeon room has its ceiling on the
-        /// level ABOVE its floor cells, so <see cref="HasCeiling"/> alone is false for the cells you walk in.)
-        /// </summary>
-        public bool IsIndoor => HasCeiling || CoveredFromAbove;
-
-        /// <summary>
         /// Floor offset inside this cell (relative to vertical layer Z).
         /// </summary>
         /// <value>
@@ -343,62 +264,12 @@ namespace FolkTales.Maps
         public float FloorThickness { get; set; } = MapDimensions.DefaultFloorThickness;
 
         /// <summary>
-        /// Optional floor color if no texture sheet is active.
-        /// </summary>
-        /// <value>
-        /// The color of the floor.
-        /// </value>
-        public Color? FloorColor { get; set; }
-
-        /// <summary>
-        /// Optional overhead ceiling wash color tint profile options.
-        /// </summary>
-        /// <value>
-        /// The color of the ceiling.
-        /// </value>
-        public Color? CeilingColor { get; set; }
-
-        /// <summary>
         /// Thickness of ceiling slab (solid volume expanding above the interior roof line).
         /// </summary>
         /// <value>
         /// The ceiling thickness.
         /// </value>
         public float CeilingThickness { get; set; } = 0.2f;
-
-        // --- Texture Slot ID Mappings ---
-
-        /// <summary>
-        /// Gets or sets the north wall texture identifier.
-        /// </summary>
-        /// <value>
-        /// The north wall texture identifier.
-        /// </value>
-        public int? NorthWallTextureId { get; set; }
-
-        /// <summary>
-        /// Gets or sets the south wall texture identifier.
-        /// </summary>
-        /// <value>
-        /// The south wall texture identifier.
-        /// </value>
-        public int? SouthWallTextureId { get; set; }
-
-        /// <summary>
-        /// Gets or sets the east wall texture identifier.
-        /// </summary>
-        /// <value>
-        /// The east wall texture identifier.
-        /// </value>
-        public int? EastWallTextureId { get; set; }
-
-        /// <summary>
-        /// Gets or sets the west wall texture identifier.
-        /// </summary>
-        /// <value>
-        /// The west wall texture identifier.
-        /// </value>
-        public int? WestWallTextureId { get; set; }
 
         /// <summary>
         /// Gets or sets the wall texture identifier.
@@ -407,48 +278,6 @@ namespace FolkTales.Maps
         /// The wall texture identifier.
         /// </value>
         public int? WallTextureId { get; set; }
-
-        // --- Interior Wallpaper Override Slots ---
-
-        /// <summary>
-        /// Gets or sets the interior wall texture identifier.
-        /// </summary>
-        /// <value>
-        /// The interior wall texture identifier.
-        /// </value>
-        public int? InteriorWallTextureId { get; set; }
-
-        /// <summary>
-        /// Gets or sets the north wall interior texture identifier.
-        /// </summary>
-        /// <value>
-        /// The north wall interior texture identifier.
-        /// </value>
-        public int? NorthWallInteriorTextureId { get; set; }
-
-        /// <summary>
-        /// Gets or sets the south wall interior texture identifier.
-        /// </summary>
-        /// <value>
-        /// The south wall interior texture identifier.
-        /// </value>
-        public int? SouthWallInteriorTextureId { get; set; }
-
-        /// <summary>
-        /// Gets or sets the east wall interior texture identifier.
-        /// </summary>
-        /// <value>
-        /// The east wall interior texture identifier.
-        /// </value>
-        public int? EastWallInteriorTextureId { get; set; }
-
-        /// <summary>
-        /// Gets or sets the west wall interior texture identifier.
-        /// </summary>
-        /// <value>
-        /// The west wall interior texture identifier.
-        /// </value>
-        public int? WestWallInteriorTextureId { get; set; }
 
         /// <summary>
         /// Gets or sets the ceiling texture identifier.

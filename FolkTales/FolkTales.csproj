@@ -15,9 +15,6 @@
     <ItemGroup>
         <ProjectReference Include="..\Core.MemoryLog\Core.MemoryLog.csproj" />
         <ProjectReference Include="..\Imaging.Objects\Imaging.Objects.csproj" />
-        <ProjectReference Include="..\MemoryManager.Core\MemoryManager.Core.csproj" />
-        <ProjectReference Include="..\MemoryManager.Lanes\MemoryManager.Lanes.csproj" />
-        <ProjectReference Include="..\MemoryManager.Types\MemoryManager.Types.csproj" />
     </ItemGroup>
 
 </Project>

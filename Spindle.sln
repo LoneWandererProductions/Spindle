@@ -25,14 +25,6 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Imaging.Texture", "Imaging.
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Mathematics.Constants", "Mathematics.Constants\Mathematics.Constants.csproj", "{04810FC1-F435-52B8-A903-C62270634EB7}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MemoryManager", "MemoryManager\MemoryManager.csproj", "{595E3C8B-A478-5F38-945B-FA23E9DFC779}"
-EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MemoryManager.Core", "MemoryManager.Core\MemoryManager.Core.csproj", "{83C6A7FE-E6CE-5029-8E69-E5162487C704}"
-EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MemoryManager.Lanes", "MemoryManager.Lanes\MemoryManager.Lanes.csproj", "{34C9C489-6BA7-5280-83F9-57A238CBEA2C}"
-EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MemoryManager.Types", "MemoryManager.Types\MemoryManager.Types.csproj", "{5B82E408-55E6-5349-917A-46BD80CC927A}"
-EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Ortho", "Ortho\Ortho.csproj", "{A89DAD3B-96A7-596D-8CEB-C9110E9870B1}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Terrain", "Terrain\Terrain.csproj", "{C49E9243-B064-5F39-8654-B96452F65946}"
@@ -95,22 +87,6 @@ Global
 		{04810FC1-F435-52B8-A903-C62270634EB7}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{04810FC1-F435-52B8-A903-C62270634EB7}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{04810FC1-F435-52B8-A903-C62270634EB7}.Release|Any CPU.Build.0 = Release|Any CPU
-		{595E3C8B-A478-5F38-945B-FA23E9DFC779}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{595E3C8B-A478-5F38-945B-FA23E9DFC779}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{595E3C8B-A478-5F38-945B-FA23E9DFC779}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{595E3C8B-A478-5F38-945B-FA23E9DFC779}.Release|Any CPU.Build.0 = Release|Any CPU
-		{83C6A7FE-E6CE-5029-8E69-E5162487C704}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{83C6A7FE-E6CE-5029-8E69-E5162487C704}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{83C6A7FE-E6CE-5029-8E69-E5162487C704}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{83C6A7FE-E6CE-5029-8E69-E5162487C704}.Release|Any CPU.Build.0 = Release|Any CPU
-		{34C9C489-6BA7-5280-83F9-57A238CBEA2C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{34C9C489-6BA7-5280-83F9-57A238CBEA2C}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{34C9C489-6BA7-5280-83F9-57A238CBEA2C}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{34C9C489-6BA7-5280-83F9-57A238CBEA2C}.Release|Any CPU.Build.0 = Release|Any CPU
-		{5B82E408-55E6-5349-917A-46BD80CC927A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{5B82E408-55E6-5349-917A-46BD80CC927A}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{5B82E408-55E6-5349-917A-46BD80CC927A}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{5B82E408-55E6-5349-917A-46BD80CC927A}.Release|Any CPU.Build.0 = Release|Any CPU
 		{A89DAD3B-96A7-596D-8CEB-C9110E9870B1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{A89DAD3B-96A7-596D-8CEB-C9110E9870B1}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{A89DAD3B-96A7-596D-8CEB-C9110E9870B1}.Release|Any CPU.ActiveCfg = Release|Any CPU

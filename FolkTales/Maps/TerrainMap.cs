@@ -177,56 +177,21 @@ namespace FolkTales.Maps
         public IEnumerable<SceneryPlacement> Scenery => _scenery;
 
         /// <summary>
-        /// Gives the props that have no texture of their own the current texture of their type slot, see
-        /// <see cref="SceneryRetexture"/>. Call it after replacing <see cref="Textures"/> on a loaded map.
-        /// </summary>
-        /// <returns>The number of props that changed.</returns>
-        public int RetextureScenery()
-        {
-            var changed = SceneryRetexture.Apply(_scenery, _sceneryGrid, Textures);
-
-            return changed;
-        }
-
-        /// <summary>
         /// The scenery grid dictionary bucket cache.
         /// </summary>
         private readonly Dictionary<(int, int), List<SceneryPlacement>> _sceneryGrid = new();
 
         /// <summary>
-        /// The water bodies
-        /// </summary>
-        private readonly List<TerrainWaterBody> _waterBodies = new();
-
-        /// <summary>
-        /// Gets the active collection of fluid bodies placed on this terrain heightmap.
-        /// </summary>
-        public IEnumerable<TerrainWaterBody> WaterBodies => _waterBodies;
-
-        // --- 2D LIGHTING MATRIX REGISTRIES ---
-
-        /// <summary>
-        /// The light grid
-        /// </summary>
-        private byte[,]? _lightGrid;
-
-        /// <summary>
-        /// Initializes the light grid.
-        /// </summary>
-        public void InitializeLightGrid()
-        {
-            _lightGrid = new byte[Width, Depth];
-            for (var x = 0; x < Width; x++)
-            for (var z = 0; z < Depth; z++)
-                _lightGrid[x, z] = MapConstants.MaxLightLevel; // Default open air to full daylight
-        }
-
-        /// <summary>
-        /// Initializes a new instance of <see cref="TerrainMap"/>.
+        /// Initializes a new instance of <see cref="TerrainMap" />.
         /// </summary>
         /// <param name="width">Number of samples along X.</param>
         /// <param name="depth">Number of samples along Z.</param>
         /// <param name="scale">Meters per grid step.</param>
+        /// <param name="fogMode">The fog mode.</param>
+        /// <param name="sightRadius">The sight radius.</param>
+        /// <param name="startExplored">if set to <c>true</c> [start explored].</param>
+        /// <param name="timeOfDay">The time of day.</param>
+        /// <param name="weather">The weather.</param>
         public TerrainMap(int width, int depth, float scale = 10f, FogMode? fogMode = null, int? sightRadius = null,
             bool startExplored = false, float? timeOfDay = null, WeatherType? weather = null)
             : this(width, depth, scale, MapSettings.From(fogMode, sightRadius, startExplored, timeOfDay, weather))
@@ -251,8 +216,6 @@ namespace FolkTales.Maps
             Depth = depth;
             Scale = scale;
             Heights = new float[width, depth];
-
-            InitializeLightGrid();
         }
 
         /// <summary>
@@ -436,81 +399,6 @@ namespace FolkTales.Maps
         }
 
         /// <summary>
-        /// Finds the water that is drawn above a world position. It uses exactly the rule the water mesh builder uses to
-        /// decide where there is water (inside the body's bounds, and at least two of the four corners of the grid
-        /// square below the water level), so the camera counts as "in water" exactly where water is visible.
-        /// </summary>
-        /// <param name="worldX">World x.</param>
-        /// <param name="worldZ">World z.</param>
-        /// <param name="surfaceY">The height of the water surface; the highest one if bodies overlap.</param>
-        /// <returns><c>true</c> if water is drawn above that position.</returns>
-        public bool TryGetWaterSurface(float worldX, float worldZ, out float surfaceY)
-        {
-            surfaceY = 0f;
-
-            if (_waterBodies.Count == 0) return false;
-
-            var gx = (int)Math.Floor(worldX / Scale);
-            var gz = (int)Math.Floor(worldZ / Scale);
-
-            if (gx < 0 || gz < 0 || gx >= Width - 1 || gz >= Depth - 1) return false;
-
-            var found = false;
-
-            foreach (var water in _waterBodies)
-            {
-                if (gx < water.MinX || gx > water.MaxX || gz < water.MinZ || gz > water.MaxZ) continue;
-
-                var submerged = 0;
-                if (this[gx, gz] < water.WaterLevel) submerged++;
-                if (this[gx + 1, gz] < water.WaterLevel) submerged++;
-                if (this[gx, gz + 1] < water.WaterLevel) submerged++;
-                if (this[gx + 1, gz + 1] < water.WaterLevel) submerged++;
-
-                if (submerged < 2) continue;
-
-                if (!found || water.WaterLevel > surfaceY)
-                {
-                    surfaceY = water.WaterLevel;
-                    found = true;
-                }
-            }
-
-            return found;
-        }
-
-        /// <summary>
-        /// Restores an existing scenery placement directly into the terrain collections
-        /// without recalculating wall offsets or seeds.
-        /// </summary>
-        /// <param name="placement">The placement.</param>
-        public void RestoreScenery(SceneryPlacement placement)
-        {
-            _scenery.Add(placement);
-
-            var cx = (int)MathF.Floor(placement.Position.X / Scale);
-            var cz = (int)MathF.Floor(placement.Position.Z / Scale);
-            var gridKey = (cx, cz);
-
-            if (!_sceneryGrid.TryGetValue(gridKey, out var list))
-            {
-                list = new List<SceneryPlacement>();
-                _sceneryGrid[gridKey] = list;
-            }
-
-            list.Add(placement);
-        }
-
-        /// <summary>
-        /// Registers a fluid body on the terrain map.
-        /// </summary>
-        /// <param name="waterBody">The water body.</param>
-        public void AddWaterBody(TerrainWaterBody waterBody)
-        {
-            _waterBodies.Add(waterBody);
-        }
-
-        /// <summary>
         /// Gets or sets the height at grid coordinate (x, z).
         /// </summary>
         /// <value>
@@ -617,27 +505,6 @@ namespace FolkTales.Maps
 
             _cachedMaxHeight = max;
             return max;
-        }
-
-
-        /// <summary>
-        /// Gets the light at.
-        /// </summary>
-        /// <param name="x">The x coordinate.</param>
-        /// <param name="z">The z coordinate.</param>
-        /// <returns>light value.</returns>
-        public byte GetLightAt(int x, int z) =>
-            (_lightGrid == null || !InBounds(x, z)) ? MapConstants.MaxLightLevel : _lightGrid[x, z];
-
-        /// <summary>
-        /// Sets the light at.
-        /// </summary>
-        /// <param name="x">The x coordinate.</param>
-        /// <param name="z">The z coordinate.</param>
-        /// <param name="value">The value.</param>
-        public void SetLightAt(int x, int z, byte value)
-        {
-            if (_lightGrid != null && InBounds(x, z)) _lightGrid[x, z] = value;
         }
     }
 }

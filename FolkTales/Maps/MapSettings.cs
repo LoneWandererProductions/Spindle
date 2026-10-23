@@ -57,33 +57,33 @@ namespace FolkTales.Maps
         /// Gets or sets the fog mode (exploration memory and/or line of sight). <c>null</c> = viewport default
         /// (dungeon: both, hybrid: exploration only).
         /// </summary>
-        public FogMode? Fog { get; set; }
+        public FogMode? Fog { get; init; }
 
         /// <summary>
         /// Gets or sets the sight radius in cells. <c>null</c> = viewport default.
         /// </summary>
-        public int? SightRadius { get; set; }
+        public int? SightRadius { get; init; }
 
         /// <summary>
         /// Gets or sets a value indicating whether the whole map counts as already discovered at the start
         /// (the cells are born in the "explored" state instead of "unexplored").
         /// </summary>
-        public bool StartExplored { get; set; }
+        public bool StartExplored { get; init; }
 
         /// <summary>
         /// Gets or sets the start hour of the day cycle (0 to 24). <c>null</c> = environment default.
         /// </summary>
-        public float? TimeOfDay { get; set; }
+        public float? TimeOfDay { get; init; }
 
         /// <summary>
         /// Gets or sets the start weather. <c>null</c> = environment default (clear).
         /// </summary>
-        public WeatherType? Weather { get; set; }
+        public WeatherType? Weather { get; init; }
 
         /// <summary>
         /// Gets or sets the player start. <c>null</c> = the viewport's own default.
         /// </summary>
-        public MapSpawn? Spawn { get; set; }
+        public MapSpawn? Spawn { get; init; }
 
         /// <summary>
         /// Whether the exploration memory is on: the map's fog mode if it sets one, otherwise the viewport default.

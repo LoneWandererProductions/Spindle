@@ -14,11 +14,6 @@ namespace FolkTales.Maps
     public static class MapConstants
     {
         /// <summary>
-        /// The level height step in cells. Alias of <see cref="MapDimensions.LevelHeightCells"/>: read the register.
-        /// </summary>
-        public const float LevelHeightStep = MapDimensions.LevelHeightCells;
-
-        /// <summary>
         /// Small upward tolerance added to a FEET height before it is turned into a level, so a body standing
         /// exactly on a floor (or a hair below it through float noise) is never counted as the level beneath.
         /// </summary>
@@ -33,21 +28,5 @@ namespace FolkTales.Maps
         /// <returns>The unclamped level index.</returns>
         public static int LevelFromHeight(float feetY, float levelHeight) =>
             (int)MathF.Floor((feetY + LevelFeetTolerance) / levelHeight);
-
-        /// <summary>
-        /// The maximum light level
-        /// </summary>
-        public const byte MaxLightLevel = 15;
-
-        /// <summary>
-        /// The minimum light level
-        /// </summary>
-        public const byte MinLightLevel = 0;
-
-        /// <summary>
-        /// The default basalt tex identifier
-        /// TODO must be changed.
-        /// </summary>
-        public const int DefaultBasaltTexId = 10011;
     }
 }
