@@ -12,17 +12,42 @@ using FolkTales.Enums;
 using FolkTales.Maps;
 using System.Drawing;
 using System.Numerics;
-using System.Windows.Input;
 
 namespace Ortho
 {
+    /// <summary>
+    /// Viewport manager handling orthographic camera updates, player movement, and frame rendering.
+    /// </summary>
     public sealed class DungeonOrthoViewport
     {
+        /// <summary>
+        /// The orthographic renderer instance.
+        /// </summary>
         private readonly DungeonOrthoRenderer _renderer;
+
+        /// <summary>
+        /// The software rasterizer instance.
+        /// </summary>
         private readonly SoftRasterizer _rast;
+
+        /// <summary>
+        /// The dungeon map instance.
+        /// </summary>
         private readonly DungeonMap? _map;
+
+        /// <summary>
+        /// Viewport width in pixels.
+        /// </summary>
         private readonly int _width;
+
+        /// <summary>
+        /// Viewport height in pixels.
+        /// </summary>
         private readonly int _height;
+
+        /// <summary>
+        /// The logger instance.
+        /// </summary>
         private readonly ILogger? _logger;
 
         // State Tracking for the "Smart" Rasterizer
@@ -37,11 +62,11 @@ namespace Ortho
         /// <summary>
         /// Initializes a new instance of the <see cref="DungeonOrthoViewport"/> class.
         /// </summary>
-        /// <param name="map">The map.</param>
-        /// <param name="rasterer">The rasterer.</param>
-        /// <param name="width">The width.</param>
-        /// <param name="height">The height.</param>
-        /// <param name="logger">The logger.</param>
+        /// <param name="map">The dungeon map.</param>
+        /// <param name="rasterer">The software rasterizer.</param>
+        /// <param name="width">The viewport width.</param>
+        /// <param name="height">The viewport height.</param>
+        /// <param name="logger">Optional logger instance.</param>
         public DungeonOrthoViewport(DungeonMap? map, SoftRasterizer rasterer, int width, int height,
             ILogger? logger = null)
         {
@@ -66,7 +91,7 @@ namespace Ortho
         }
 
         /// <summary>
-        /// Gets the player.
+        /// Gets the player actor.
         /// </summary>
         /// <value>
         /// The player.
@@ -74,15 +99,15 @@ namespace Ortho
         public Actor Player { get; }
 
         /// <summary>
-        /// Gets the actors.
+        /// Gets the list of active actors in the viewport.
         /// </summary>
         /// <value>
-        /// The actors.
+        /// The actors list.
         /// </value>
         public List<Actor> Actors { get; init; }
 
         /// <summary>
-        /// Gets the renderer.
+        /// Gets the underlying orthographic renderer.
         /// </summary>
         /// <value>
         /// The renderer.
@@ -90,10 +115,10 @@ namespace Ortho
         public DungeonOrthoRenderer Renderer => _renderer;
 
         /// <summary>
-        /// Renders the specified key.
+        /// Renders one frame of the orthographic viewport.
         /// </summary>
-        /// <param name="key">The key.</param>
-        /// <returns>The rendered bitmap.</returns>
+        /// <param name="key">Optional active game key input.</param>
+        /// <returns>The rendered bitmap frame.</returns>
         public Bitmap? Render(GameKey? key = null)
         {
             if (key.HasValue) ApplyKeyMovement(key.Value);
@@ -126,7 +151,8 @@ namespace Ortho
                 Sprite = a.SpriteId
             }).ToList();
 
-            var frame = _renderer.Render(_camPos, vp, dolls);
+            // Pass both camera position and look-at target to the renderer
+            var frame = _renderer.Render(_camPos, _target, vp, dolls);
 
             // 3. Cache current state for the next frame's comparison
             _lastCamPos = _camPos;
@@ -137,9 +163,9 @@ namespace Ortho
         }
 
         /// <summary>
-        /// Applies the key movement.
+        /// Applies the key movement to update player position and camera tracking.
         /// </summary>
-        /// <param name="key">The key.</param>
+        /// <param name="key">The game key pressed.</param>
         public void ApplyKeyMovement(GameKey key)
         {
             const float moveSpeed = 0.5f;
@@ -150,6 +176,11 @@ namespace Ortho
             if (key == GameKey.S) Player.Position.Z += moveSpeed;
             if (key == GameKey.A) Player.Position.X -= moveSpeed;
             if (key == GameKey.D) Player.Position.X += moveSpeed;
+
+            // Fix: Update camera target to track the player's position while preserving camera offset/pitch
+            var camOffset = _camPos - _target;
+            _target = new Vector3(Player.Position.X, 0f, Player.Position.Z);
+            _camPos = _target + camOffset;
 
             // Up/Down: Look Angle (Pitch adjustment)
             // This shifts the camera altitude and target offset to "tilt" the view

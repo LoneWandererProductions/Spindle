@@ -9,7 +9,6 @@
 using FolkTales;
 using System.Drawing;
 using System.Numerics;
-using System.Windows.Input;
 using FolkTales.Interfaces;
 using FolkTales.Enums;
 using FolkTales.Maps;

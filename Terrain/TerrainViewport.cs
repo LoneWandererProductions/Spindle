@@ -13,7 +13,6 @@ using FolkTales.Interfaces;
 using FolkTales.Maps;
 using System.Drawing;
 using System.Numerics;
-using System.Windows.Input;
 
 namespace Terrain
 {

@@ -1,5 +1,3 @@
-using System.Windows;
-
 namespace Spindle.Viewer
 {
     /// <summary>

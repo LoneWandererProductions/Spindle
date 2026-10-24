@@ -22,28 +22,28 @@ namespace Ortho
     public class DungeonOrthoRenderer
     {
         /// <summary>
-        /// The map
+        /// The map to be rendered.
         /// </summary>
         private readonly DungeonMap? _map;
 
         /// <summary>
-        /// The rasterizer
+        /// The software rasterizer instance.
         /// </summary>
         private readonly IRender _rasterizer;
 
         /// <summary>
-        /// Gets or sets the mode.
+        /// Gets or sets the current rendering mode (Textured, Solid, Wireframe).
         /// </summary>
         /// <value>
-        /// The mode.
+        /// The render mode.
         /// </value>
         public RenderMode Mode { get; set; } = RenderMode.Textured;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="DungeonOrthoRenderer"/> class.
         /// </summary>
-        /// <param name="map">The map.</param>
-        /// <param name="rasterizer">The rasterizer.</param>
+        /// <param name="map">The dungeon map.</param>
+        /// <param name="rasterizer">The rasterizer implementation.</param>
         public DungeonOrthoRenderer(DungeonMap? map, IRender rasterizer)
         {
             _map = map;
@@ -53,14 +53,17 @@ namespace Ortho
         /// <summary>
         /// Renders the orthographic top-down view.
         /// </summary>
-        /// <param name="camPos">The cam position.</param>
-        /// <param name="vp">The vp.</param>
-        /// <param name="dolls">The dolls.</param>
+        /// <param name="camPos">The camera position.</param>
+        /// <param name="target">The camera look-at target position.</param>
+        /// <param name="vp">The view-projection matrix.</param>
+        /// <param name="dolls">Optional list of paper dolls / actors to render.</param>
         /// <returns>Returns a Bitmap representing the rendered orthographic view.</returns>
-        public Bitmap? Render(Vector3 camPos, Matrix4x4 vp, List<PaperDoll>? dolls = null)
+        public Bitmap? Render(Vector3 camPos, Vector3 target, Matrix4x4 vp, List<PaperDoll>? dolls = null)
         {
             _rasterizer.Clear(new ColorRgba(20, 15, 25, 255)); // Matches Dungeon dark void
             var drawList = new List<DrawCommand>();
+
+            if (_map == null) return _rasterizer.GetFrame();
 
             var scale = _map.DungeonCellScale > 0f ? _map.DungeonCellScale : 1.0f;
 
@@ -73,7 +76,7 @@ namespace Ortho
                         var cell = _map.GetCell(x, y, z);
                         if (cell == null || cell.IsEmpty) continue;
 
-                        EnqueueCell(x, y, z, cell, vp, camPos, scale, drawList);
+                        EnqueueCell(x, y, z, cell, vp, camPos, target, scale, drawList);
                     }
                 }
             }
@@ -101,6 +104,10 @@ namespace Ortho
             return _rasterizer.GetFrame();
         }
 
+        /// <summary>
+        /// Executes a single draw command through the rasterizer.
+        /// </summary>
+        /// <param name="cmd">The draw command to execute.</param>
         private void ExecuteCommand(DrawCommand cmd)
         {
             if (cmd.Type == CommandType.Triangle)
@@ -155,17 +162,18 @@ namespace Ortho
         }
 
         /// <summary>
-        /// Enqueues the cell.
+        /// Enqueues the cell geometry for rendering.
         /// </summary>
-        /// <param name="x">The x.</param>
-        /// <param name="y">The y.</param>
-        /// <param name="z">The z.</param>
-        /// <param name="cell">The cell.</param>
-        /// <param name="vp">The vp.</param>
-        /// <param name="camPos">The cam position.</param>
-        /// <param name="scale">The scale.</param>
-        /// <param name="list">The list.</param>
-        private void EnqueueCell(int x, int y, int z, MapCell3D cell, Matrix4x4 vp, Vector3 camPos, float scale,
+        /// <param name="x">The X grid coordinate.</param>
+        /// <param name="y">The Y grid coordinate.</param>
+        /// <param name="z">The Z layer coordinate.</param>
+        /// <param name="cell">The map cell data.</param>
+        /// <param name="vp">The view-projection matrix.</param>
+        /// <param name="camPos">The camera position.</param>
+        /// <param name="target">The camera target position.</param>
+        /// <param name="scale">The cell scale.</param>
+        /// <param name="list">The command list to append to.</param>
+        private void EnqueueCell(int x, int y, int z, MapCell3D cell, Matrix4x4 vp, Vector3 camPos, Vector3 target, float scale,
             List<DrawCommand> list)
         {
             var levelHeight = (cell.CeilingHeight - cell.FloorHeight) * scale;
@@ -188,50 +196,61 @@ namespace Ortho
 
             // 1. Always render floors in top-down view
             if (cell.HasFloor)
-                EnqueueQuad(c[0], c[1], c[2], c[3], vp, camPos, cell.FloorTextureId, groundColor, list);
+                EnqueueQuad(c[0], c[1], c[2], c[3], vp, camPos, target, cell.FloorTextureId, groundColor, list);
 
             // 2. CEILINGS ARE CULLED IN TOP-DOWN ORTHO MODE (so you can see inside!)
 
             // 3. Render room walls
-            if (cell.HasWallNorth) EnqueueQuad(c[0], c[4], c[5], c[1], vp, camPos, cell.WallTextureId, sideColor, list);
-            if (cell.HasWallSouth) EnqueueQuad(c[2], c[6], c[7], c[3], vp, camPos, cell.WallTextureId, sideColor, list);
-            if (cell.HasWallWest) EnqueueQuad(c[3], c[7], c[4], c[0], vp, camPos, cell.WallTextureId, sideColor, list);
-            if (cell.HasWallEast) EnqueueQuad(c[1], c[5], c[6], c[2], vp, camPos, cell.WallTextureId, sideColor, list);
+            if (cell.HasWallNorth) EnqueueQuad(c[0], c[4], c[5], c[1], vp, camPos, target, cell.WallTextureId, sideColor, list);
+            if (cell.HasWallSouth) EnqueueQuad(c[2], c[6], c[7], c[3], vp, camPos, target, cell.WallTextureId, sideColor, list);
+            if (cell.HasWallWest) EnqueueQuad(c[3], c[7], c[4], c[0], vp, camPos, target, cell.WallTextureId, sideColor, list);
+            if (cell.HasWallEast) EnqueueQuad(c[1], c[5], c[6], c[2], vp, camPos, target, cell.WallTextureId, sideColor, list);
         }
 
         /// <summary>
-        /// Enqueues the quad.
+        /// Enqueues a quad geometry split into two triangles.
         /// </summary>
-        /// <param name="v0">The v0.</param>
-        /// <param name="v1">The v1.</param>
-        /// <param name="v2">The v2.</param>
-        /// <param name="v3">The v3.</param>
-        /// <param name="vp">The vp.</param>
-        /// <param name="camPos">The cam position.</param>
-        /// <param name="tex">The tex.</param>
-        /// <param name="col">The col.</param>
-        /// <param name="list">The list.</param>
-        private void EnqueueQuad(Vector3 v0, Vector3 v1, Vector3 v2, Vector3 v3, Matrix4x4 vp, Vector3 camPos, int? tex,
+        /// <param name="v0">First vertex.</param>
+        /// <param name="v1">Second vertex.</param>
+        /// <param name="v2">Third vertex.</param>
+        /// <param name="v3">Fourth vertex.</param>
+        /// <param name="vp">The view-projection matrix.</param>
+        /// <param name="camPos">The camera position.</param>
+        /// <param name="target">The camera target position.</param>
+        /// <param name="tex">Optional texture ID.</param>
+        /// <param name="col">Fallback color.</param>
+        /// <param name="list">The command list to append to.</param>
+        /// <summary>
+        /// Enqueues a quad geometry split into two triangles.
+        /// </summary>
+        /// <param name="v0">First vertex.</param>
+        /// <param name="v1">Second vertex.</param>
+        /// <param name="v2">Third vertex.</param>
+        /// <param name="v3">Fourth vertex.</param>
+        /// <param name="vp">The view-projection matrix.</param>
+        /// <param name="camPos">The camera position.</param>
+        /// <param name="target">The camera target position.</param>
+        /// <param name="tex">Optional texture ID.</param>
+        /// <param name="col">Fallback color.</param>
+        /// <param name="list">The command list to append to.</param>
+        private void EnqueueQuad(Vector3 v0, Vector3 v1, Vector3 v2, Vector3 v3, Matrix4x4 vp, Vector3 camPos, Vector3 target, int? tex,
             ColorRgba col, List<DrawCommand> list)
         {
-            var normal = Vector3.Normalize(Vector3.Cross(v1 - v0, v2 - v0));
-            var viewDir = Vector3.Normalize(v0 - camPos);
-            if (Mode != RenderMode.Wireframe && Vector3.Dot(normal, viewDir) >= 0) return;
-
+            // Backface culling removed for orthographic top-down view to prevent complete geometry culling
             EnqueueTriangle(v0, v1, v2, vp, tex, col, list);
             EnqueueTriangle(v0, v2, v3, vp, tex, col, list);
         }
 
         /// <summary>
-        /// Enqueues the triangle.
+        /// Enqueues a single triangle draw command.
         /// </summary>
-        /// <param name="w0">The w0.</param>
-        /// <param name="w1">The w1.</param>
-        /// <param name="w2">The w2.</param>
-        /// <param name="vp">The vp.</param>
-        /// <param name="tex">The tex.</param>
-        /// <param name="col">The col.</param>
-        /// <param name="list">The list.</param>
+        /// <param name="w0">World space vertex 0.</param>
+        /// <param name="w1">World space vertex 1.</param>
+        /// <param name="w2">World space vertex 2.</param>
+        /// <param name="vp">The view-projection matrix.</param>
+        /// <param name="tex">Optional texture ID.</param>
+        /// <param name="col">Fallback color.</param>
+        /// <param name="list">The command list to append to.</param>
         private void EnqueueTriangle(Vector3 w0, Vector3 w1, Vector3 w2, Matrix4x4 vp, int? tex, ColorRgba col,
             List<DrawCommand> list)
         {
@@ -255,9 +274,9 @@ namespace Ortho
         }
 
         /// <summary>
-        /// Projects to vec2.
+        /// Projects normalized device coordinates to screen 2D space vector.
         /// </summary>
-        /// <param name="ndc">The NDC.</param>
+        /// <param name="ndc">The normalized device coordinate vector.</param>
         /// <returns>Vector2 representing the projected screen coordinates.</returns>
         private Vec2 ProjectToVec2(Vector4 ndc)
         {
