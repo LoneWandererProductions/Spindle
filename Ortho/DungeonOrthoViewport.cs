@@ -8,6 +8,7 @@
 
 using Core.MemoryLog;
 using FolkTales;
+using FolkTales.Enums;
 using FolkTales.Maps;
 using System.Drawing;
 using System.Numerics;
@@ -64,8 +65,28 @@ namespace Ortho
                 _camPos, _target, _zoom);
         }
 
+        /// <summary>
+        /// Gets the player.
+        /// </summary>
+        /// <value>
+        /// The player.
+        /// </value>
         public Actor Player { get; }
+
+        /// <summary>
+        /// Gets the actors.
+        /// </summary>
+        /// <value>
+        /// The actors.
+        /// </value>
         public List<Actor> Actors { get; init; }
+
+        /// <summary>
+        /// Gets the renderer.
+        /// </summary>
+        /// <value>
+        /// The renderer.
+        /// </value>
         public DungeonOrthoRenderer Renderer => _renderer;
 
         /// <summary>
@@ -73,7 +94,7 @@ namespace Ortho
         /// </summary>
         /// <param name="key">The key.</param>
         /// <returns>The rendered bitmap.</returns>
-        public Bitmap? Render(Key? key = null)
+        public Bitmap? Render(GameKey? key = null)
         {
             if (key.HasValue) ApplyKeyMovement(key.Value);
 
@@ -119,34 +140,34 @@ namespace Ortho
         /// Applies the key movement.
         /// </summary>
         /// <param name="key">The key.</param>
-        public void ApplyKeyMovement(Key key)
+        public void ApplyKeyMovement(GameKey key)
         {
             const float moveSpeed = 0.5f;
             const float lookSpeed = 0.5f;
 
             // WASD: Standard movement
-            if (key == Key.W) Player.Position.Z -= moveSpeed;
-            if (key == Key.S) Player.Position.Z += moveSpeed;
-            if (key == Key.A) Player.Position.X -= moveSpeed;
-            if (key == Key.D) Player.Position.X += moveSpeed;
+            if (key == GameKey.W) Player.Position.Z -= moveSpeed;
+            if (key == GameKey.S) Player.Position.Z += moveSpeed;
+            if (key == GameKey.A) Player.Position.X -= moveSpeed;
+            if (key == GameKey.D) Player.Position.X += moveSpeed;
 
             // Up/Down: Look Angle (Pitch adjustment)
             // This shifts the camera altitude and target offset to "tilt" the view
-            if (key == Key.Up)
+            if (key == GameKey.Up)
             {
                 _camPos.Y += lookSpeed;
                 _target.Z -= lookSpeed;
             }
 
-            if (key == Key.Down)
+            if (key == GameKey.Down)
             {
                 _camPos.Y = Math.Max(2f, _camPos.Y - lookSpeed); // Prevent going under floor
                 _target.Z += lookSpeed;
             }
 
             // Optional: Zoom control with PageUp/PageDown
-            if (key == Key.PageUp) _zoom = Math.Max(5f, _zoom - 1f);
-            if (key == Key.PageDown) _zoom = Math.Min(100f, _zoom + 1f);
+            if (key == GameKey.PageUp) _zoom = Math.Max(5f, _zoom - 1f);
+            if (key == GameKey.PageDown) _zoom = Math.Min(100f, _zoom + 1f);
         }
     }
 }

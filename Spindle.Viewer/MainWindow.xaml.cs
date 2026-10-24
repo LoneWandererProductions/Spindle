@@ -33,16 +33,44 @@ namespace Spindle.Viewer
         /// </summary>
         private const int RenderWidth = 800;
 
+        /// <summary>
+        /// The render height
+        /// </summary>
         private const int RenderHeight = 600;
 
+        /// <summary>
+        /// The logger
+        /// </summary>
         private readonly ILogger? _logger;
-        private readonly HashSet<Key> _pressedKeys = new();
 
+        /// <summary>
+        /// The pressed keys
+        /// </summary>
+        private readonly HashSet<GameKey> _pressedKeys = new();
+
+        /// <summary>
+        /// The active
+        /// </summary>
         private string? _active;
+
+        /// <summary>
+        /// The raster
+        /// </summary>
         private SoftRasterizer? _raster;
 
+        /// <summary>
+        /// The terrain viewport
+        /// </summary>
         private TerrainViewport? _terrainViewport;
+
+        /// <summary>
+        /// The dungeon viewport
+        /// </summary>
         private DungeonViewport? _dungeonViewport;
+
+        /// <summary>
+        /// The ortho viewport
+        /// </summary>
         private DungeonOrthoViewport? _orthoViewport;
 
         /// <summary>
@@ -86,6 +114,11 @@ namespace Spindle.Viewer
             if (bmp != null) ImageView.Bitmap = bmp;
         }
 
+        /// <summary>
+        /// Handles the SelectionChanged event of the ComboBoxRender control.
+        /// </summary>
+        /// <param name="sender">The source of the event.</param>
+        /// <param name="e">The <see cref="SelectionChangedEventArgs"/> instance containing the event data.</param>
         private void ComboBoxRender_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             if (ComboBoxRender.SelectedItem is not ComboBoxItem item) return;
@@ -122,6 +155,9 @@ namespace Spindle.Viewer
             Focus();
         }
 
+        /// <summary>
+        /// Initiates the terrain.
+        /// </summary>
         private void InitiateTerrain()
         {
             var map = new TerrainMap(50, 50, 10f);
@@ -133,19 +169,39 @@ namespace Spindle.Viewer
             _terrainViewport.Player.Position = new Vector3(200, 60, 200);
         }
 
+        /// <summary>
+        /// Initiates the dungeon.
+        /// </summary>
+        /// <param name="mode">The mode.</param>
         private void InitiateDungeon(RenderMode mode)
         {
             _raster = new SoftRasterizer(RenderWidth, RenderHeight, null, _logger);
-            _dungeonViewport = new DungeonViewport(CreateRoomMap(), _raster, RenderWidth, RenderHeight, _logger);
-            _dungeonViewport.Renderer.Mode = mode;
-            _dungeonViewport.Player.Position = new Vector3(1.5f, 1.0f, 1.5f);
+            _dungeonViewport = new DungeonViewport(CreateRoomMap(), _raster, RenderWidth, RenderHeight, _logger)
+                {
+                    Renderer =
+                    {
+                        Mode = mode
+                    },
+                    Player =
+                    {
+                        Position = new Vector3(1.5f, 1.0f, 1.5f)
+                    }
+                };
         }
 
+        /// <summary>
+        /// Initiates the ortho.
+        /// </summary>
         private void InitiateOrtho()
         {
             _raster = new SoftRasterizer(RenderWidth, RenderHeight, null, _logger);
-            _orthoViewport = new DungeonOrthoViewport(CreateRoomMap(), _raster, RenderWidth, RenderHeight, _logger);
-            _orthoViewport.Player.Position = new Vector3(1.5f, 0.5f, 1.5f);
+            _orthoViewport = new DungeonOrthoViewport(CreateRoomMap(), _raster, RenderWidth, RenderHeight, _logger)
+                {
+                    Player =
+                    {
+                        Position = new Vector3(1.5f, 0.5f, 1.5f)
+                    }
+                };
         }
 
         /// <summary>
@@ -185,6 +241,10 @@ namespace Spindle.Viewer
             return map;
         }
 
+        /// <summary>
+        /// Builds the hills.
+        /// </summary>
+        /// <param name="map">The map.</param>
         private static void BuildHills(TerrainMap map)
         {
             void AddHill(int cx, int cz, float peak, int radius)
@@ -213,16 +273,45 @@ namespace Spindle.Viewer
             map.RecalculateMaxHeight();
         }
 
-        private void Window_PreviewKeyDown(object sender, KeyEventArgs e) => _pressedKeys.Add(e.Key);
+        /// <summary>
+        /// Handles the PreviewKeyDown event of the Window control.
+        /// </summary>
+        /// <param name="sender">The source of the event.</param>
+        /// <param name="e">The <see cref="KeyEventArgs"/> instance containing the event data.</param>
+        private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            var gameKey = e.Key.ToGameKey();
+            if (gameKey != GameKey.Unknown)
+                _pressedKeys.Add(gameKey);
+        }
 
-        private void Window_PreviewKeyUp(object sender, KeyEventArgs e) => _pressedKeys.Remove(e.Key);
+        /// <summary>
+        /// Handles the PreviewKeyUp event of the Window control.
+        /// </summary>
+        /// <param name="sender">The source of the event.</param>
+        /// <param name="e">The <see cref="KeyEventArgs"/> instance containing the event data.</param>
+        private void Window_PreviewKeyUp(object sender, KeyEventArgs e)
+        {
+            var gameKey = e.Key.ToGameKey();
+            if (gameKey != GameKey.Unknown)
+                _pressedKeys.Remove(gameKey);
+        }
 
+        /// <summary>
+        /// Logs the diagnostics.
+        /// </summary>
+        /// <param name="text">The text.</param>
         private void LogDiagnostics(string text)
         {
             TxtDiagnostics.AppendText($"[{DateTime.Now:HH:mm:ss.fff}] {text}\n");
             TxtDiagnostics.ScrollToEnd();
         }
 
+        /// <summary>
+        /// Handles the Closing event of the Window control.
+        /// </summary>
+        /// <param name="sender">The source of the event.</param>
+        /// <param name="e">The <see cref="System.ComponentModel.CancelEventArgs"/> instance containing the event data.</param>
         private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
         {
             CompositionTarget.Rendering -= GameLoop;

@@ -72,16 +72,15 @@ namespace FolkTales.Maps
         /// <param name="width">The width.</param>
         /// <param name="depth">The depth.</param>
         /// <param name="levels">The levels.</param>
-        /// <param name="fogMode">The fog mode.</param>
         /// <param name="sightRadius">The sight radius.</param>
         /// <param name="startExplored">if set to <c>true</c> [start explored].</param>
         /// <param name="openAirFromLevel">The open air from level.</param>
         /// <param name="timeOfDay">The time of day.</param>
         /// <param name="weather">The weather.</param>
-        public DungeonMap(int width, int depth, int levels, FogMode? fogMode = null, int? sightRadius = null,
+        public DungeonMap(int width, int depth, int levels, int? sightRadius = null,
             bool startExplored = false, int? openAirFromLevel = null, float? timeOfDay = null,
             WeatherType? weather = null)
-            : this(width, depth, levels, MapSettings.From(fogMode, sightRadius, startExplored, timeOfDay, weather),
+            : this(width, depth, levels, MapSettings.From(sightRadius, startExplored, timeOfDay, weather),
                 openAirFromLevel)
         {
         }

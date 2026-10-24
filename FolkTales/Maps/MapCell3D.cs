@@ -7,7 +7,6 @@
  */
 
 using FolkTales.Enums;
-using System.Drawing;
 using System.Numerics;
 
 namespace FolkTales.Maps
@@ -226,12 +225,6 @@ namespace FolkTales.Maps
         ///   <c>true</c> if this instance has ceiling; otherwise, <c>false</c>.
         /// </value>
         public bool HasCeiling { get; set; } = true;
-
-        /// <summary>
-        /// Gets whether something above this cell closes it off from the sky (the ceiling of the level above, a roof, the
-        /// ground over an underground level). Not edited by hand: <see cref="SkyLightSolver"/> sets it, like light.
-        /// </summary>
-        public bool CoveredFromAbove { get; internal set; }
 
         /// <summary>
         /// Base height of this cell's level in cells (Z * LevelHeightCells). FloorHeight and CeilingHeight are offsets

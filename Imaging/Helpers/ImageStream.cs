@@ -630,7 +630,7 @@ namespace Imaging.Helpers
                 //get the Bitmap
                 var btm = dbm.ToBitmap();
                 //make Transparent
-                btm!.MakeTransparent(replacementColor);
+                btm.MakeTransparent(replacementColor);
                 //cleanup
                 dbm.Dispose();
                 return btm;

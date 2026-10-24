@@ -8,6 +8,7 @@
 
 using Core.MemoryLog;
 using FolkTales;
+using FolkTales.Enums;
 using FolkTales.Interfaces;
 using FolkTales.Maps;
 using System.Drawing;
@@ -149,7 +150,10 @@ namespace Terrain
         /// <summary>
         /// Render a frame. Applies key input, updates player, and optionally renders actors.
         /// </summary>
-        public Bitmap? Render(Key? eKey = null, float deltaTime = 0.016f)
+        /// <param name="eKey">The e key.</param>
+        /// <param name="deltaTime">The delta time.</param>
+        /// <returns></returns>
+        public Bitmap? Render(GameKey? eKey = null, float deltaTime = 0.016f)
         {
             // Apply input to player
             if (eKey.HasValue)
@@ -209,9 +213,11 @@ namespace Terrain
         /// Applies the key movement.
         /// </summary>
         /// <param name="key">The key.</param>
-        public void ApplyKeyMovement(Key key)
+        public void ApplyKeyMovement(GameKey key)
         {
             _logger?.LogDebug($"Key pressed: {key}");
+
+            if (_map == null) return;
 
             var moveSpeed = _map.Width * 0.1f;
             const float rotSpeed = 0.4f; // slightly faster rotation
@@ -220,18 +226,18 @@ namespace Terrain
             var forward = Vector3.Transform(new Vector3(0, 0, moveSpeed), Matrix4x4.CreateRotationY(Camera.Yaw));
             var right = Vector3.Transform(new Vector3(moveSpeed, 0, 0), Matrix4x4.CreateRotationY(Camera.Yaw));
 
-            if (key == Key.W) Player.Position += forward;
-            if (key == Key.S) Player.Position -= forward;
-            if (key == Key.A) Player.Position -= right;
-            if (key == Key.D) Player.Position += right;
+            if (key == GameKey.W) Player.Position += forward;
+            if (key == GameKey.S) Player.Position -= forward;
+            if (key == GameKey.A) Player.Position -= right;
+            if (key == GameKey.D) Player.Position += right;
 
-            if (key == Key.Space) Player.Jump();
+            if (key == GameKey.Space) Player.Jump();
 
             // Camera rotation (Yaw and Pitch/Look Up-Down)
-            if (key == Key.Left) Camera.Yaw -= rotSpeed;
-            if (key == Key.Right) Camera.Yaw += rotSpeed;
-            if (key == Key.Up) Camera.Pitch = MathF.Min(Camera.Pitch + rotSpeed, MathF.PI / 2);
-            if (key == Key.Down) Camera.Pitch = MathF.Max(Camera.Pitch - rotSpeed, -MathF.PI / 2);
+            if (key == GameKey.Left) Camera.Yaw -= rotSpeed;
+            if (key == GameKey.Right) Camera.Yaw += rotSpeed;
+            if (key == GameKey.Up) Camera.Pitch = MathF.Min(Camera.Pitch + rotSpeed, MathF.PI / 2);
+            if (key == GameKey.Down) Camera.Pitch = MathF.Max(Camera.Pitch - rotSpeed, -MathF.PI / 2);
         }
 
         /// <inheritdoc/>

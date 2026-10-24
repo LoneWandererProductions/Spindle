@@ -125,7 +125,7 @@ namespace Dungeons
         /// <param name="eKey">Optional key input (movement or rotation).</param>
         /// <param name="deltaTime">Elapsed time step for physics updates (default: ~16 ms).</param>
         /// <returns>A rendered <see cref="Bitmap"/> image of the current frame.</returns>
-        public Bitmap? Render(Key? eKey = null, float deltaTime = 0.016f)
+        public Bitmap? Render(GameKey? eKey = null, float deltaTime = 0.016f)
         {
             // Apply input to player
             if (eKey.HasValue)
@@ -185,7 +185,7 @@ namespace Dungeons
         /// Supports WASD movement, arrow key rotation, and jumping.
         /// </summary>
         /// <param name="key">The key input pressed by the user.</param>
-        public void ApplyKeyMovement(Key key)
+        public void ApplyKeyMovement(GameKey key)
         {
             _logger?.LogDebug($"Key pressed: {key}");
 
@@ -196,18 +196,18 @@ namespace Dungeons
             var forward = Vector3.Transform(new Vector3(0, 0, moveSpeed), Matrix4x4.CreateRotationY(Camera.Yaw));
             var right = Vector3.Transform(new Vector3(moveSpeed, 0, 0), Matrix4x4.CreateRotationY(Camera.Yaw));
 
-            if (key == Key.W) Player.Position += forward;
-            if (key == Key.S) Player.Position -= forward;
-            if (key == Key.A) Player.Position -= right;
-            if (key == Key.D) Player.Position += right;
+            if (key == GameKey.W) Player.Position += forward;
+            if (key == GameKey.S) Player.Position -= forward;
+            if (key == GameKey.A) Player.Position -= right;
+            if (key == GameKey.D) Player.Position += right;
 
-            if (key == Key.Space) Player.Jump(); // jump handled by Actor
+            if (key == GameKey.Space) Player.Jump(); // jump handled by Actor
 
             // Camera rotation (Yaw and Pitch/Look Up-Down)
-            if (key == Key.Left) Camera.Yaw -= rotSpeed;
-            if (key == Key.Right) Camera.Yaw += rotSpeed;
-            if (key == Key.Up) Camera.Pitch = MathF.Min(Camera.Pitch + rotSpeed, MathF.PI / 2);
-            if (key == Key.Down) Camera.Pitch = MathF.Max(Camera.Pitch - rotSpeed, -MathF.PI / 2);
+            if (key == GameKey.Left) Camera.Yaw -= rotSpeed;
+            if (key == GameKey.Right) Camera.Yaw += rotSpeed;
+            if (key == GameKey.Up) Camera.Pitch = MathF.Min(Camera.Pitch + rotSpeed, MathF.PI / 2);
+            if (key == GameKey.Down) Camera.Pitch = MathF.Max(Camera.Pitch - rotSpeed, -MathF.PI / 2);
         }
     }
 }

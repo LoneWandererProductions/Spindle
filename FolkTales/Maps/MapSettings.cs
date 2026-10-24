@@ -54,12 +54,6 @@ namespace FolkTales.Maps
     public sealed class MapSettings
     {
         /// <summary>
-        /// Gets or sets the fog mode (exploration memory and/or line of sight). <c>null</c> = viewport default
-        /// (dungeon: both, hybrid: exploration only).
-        /// </summary>
-        public FogMode? Fog { get; init; }
-
-        /// <summary>
         /// Gets or sets the sight radius in cells. <c>null</c> = viewport default.
         /// </summary>
         public int? SightRadius { get; init; }
@@ -86,34 +80,16 @@ namespace FolkTales.Maps
         public MapSpawn? Spawn { get; init; }
 
         /// <summary>
-        /// Whether the exploration memory is on: the map's fog mode if it sets one, otherwise the viewport default.
-        /// </summary>
-        /// <param name="viewportDefault">What the viewport does without a setting.</param>
-        /// <returns>True if explored cells are remembered (and unexplored ones stay dark).</returns>
-        public bool ExplorationEnabled(bool viewportDefault) =>
-            Fog is { } fog ? (fog & FogMode.Exploration) != 0 : viewportDefault;
-
-        /// <summary>
-        /// Whether line of sight is on: the map's fog mode if it sets one, otherwise the viewport default.
-        /// </summary>
-        /// <param name="viewportDefault">What the viewport does without a setting.</param>
-        /// <returns>True if only what is in sight is shown at full brightness.</returns>
-        public bool LineOfSightEnabled(bool viewportDefault) =>
-            Fog is { } fog ? (fog & FogMode.LineOfSight) != 0 : viewportDefault;
-
-        /// <summary>
         /// Creates a settings object from the optional constructor arguments of the maps.
         /// </summary>
-        /// <param name="fogMode">The fog mode.</param>
         /// <param name="sightRadius">The sight radius.</param>
         /// <param name="startExplored">If set to <c>true</c> the map starts discovered.</param>
         /// <param name="timeOfDay">The start hour.</param>
         /// <param name="weather">The start weather.</param>
         /// <returns>The settings.</returns>
-        public static MapSettings From(FogMode? fogMode, int? sightRadius, bool startExplored, float? timeOfDay,
+        public static MapSettings From(int? sightRadius, bool startExplored, float? timeOfDay,
             WeatherType? weather) => new()
         {
-            Fog = fogMode,
             SightRadius = sightRadius,
             StartExplored = startExplored,
             TimeOfDay = timeOfDay,
@@ -126,7 +102,6 @@ namespace FolkTales.Maps
         /// <returns>The copy.</returns>
         public MapSettings Clone() => new()
         {
-            Fog = Fog,
             SightRadius = SightRadius,
             StartExplored = StartExplored,
             TimeOfDay = TimeOfDay,

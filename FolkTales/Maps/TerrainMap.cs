@@ -187,14 +187,13 @@ namespace FolkTales.Maps
         /// <param name="width">Number of samples along X.</param>
         /// <param name="depth">Number of samples along Z.</param>
         /// <param name="scale">Meters per grid step.</param>
-        /// <param name="fogMode">The fog mode.</param>
         /// <param name="sightRadius">The sight radius.</param>
         /// <param name="startExplored">if set to <c>true</c> [start explored].</param>
         /// <param name="timeOfDay">The time of day.</param>
         /// <param name="weather">The weather.</param>
-        public TerrainMap(int width, int depth, float scale = 10f, FogMode? fogMode = null, int? sightRadius = null,
+        public TerrainMap(int width, int depth, float scale = 10f, int? sightRadius = null,
             bool startExplored = false, float? timeOfDay = null, WeatherType? weather = null)
-            : this(width, depth, scale, MapSettings.From(fogMode, sightRadius, startExplored, timeOfDay, weather))
+            : this(width, depth, scale, MapSettings.From(sightRadius, startExplored, timeOfDay, weather))
         {
         }
 
